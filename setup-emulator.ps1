@@ -46,7 +46,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "[+] Frida $fridaVersion available" -ForegroundColor Green
 
-# -- Step 4: Check for emulator --
+# -- Step 4: Launch emulator if not already running --
 Write-Host ""
 Write-Host "--- Checking for connected emulator ---" -ForegroundColor Yellow
 $devices = cmd /c "adb devices 2>&1"
@@ -54,30 +54,87 @@ $connected = $devices | Select-String "device$"
 
 if ($connected) {
     Write-Host "[+] Emulator already connected!" -ForegroundColor Green
-    & adb devices
+    cmd /c "adb devices"
 } else {
-    Write-Host "[!] No emulator connected." -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "Follow these steps in BrutDroid:" -ForegroundColor Cyan
-    Write-Host "  1. Create Virtual Device    (Menu 1)" -ForegroundColor White
-    Write-Host "     - Use API 31, x86_64 or arm64" -ForegroundColor Gray
-    Write-Host "  2. Root Emulator            (Menu 2)" -ForegroundColor White
-    Write-Host "     - Installs Magisk and patches system image" -ForegroundColor Gray
-    Write-Host "  3. Install Tools            (Menu 3)" -ForegroundColor White
-    Write-Host "     - Installs frida-tools, objection, etc." -ForegroundColor Gray
-    Write-Host "  4. Configure Emulator       (Menu 4)" -ForegroundColor White
-    Write-Host "     - Install Frida Server on device" -ForegroundColor Gray
-    Write-Host "     - Install Burp Certificate (optional)" -ForegroundColor Gray
-    Write-Host ""
-    Write-Host "Starting BrutDroid now..." -ForegroundColor Cyan
+    Write-Host "[!] No emulator connected. Launching one..." -ForegroundColor Yellow
     Write-Host ""
 
-    Push-Location $BrutDroidDir
-    python BrutDroid.py
-    Pop-Location
+    # Find available AVDs
+    $avdList = cmd /c "emulator -list-avds 2>&1"
+    $avds = $avdList | Where-Object { $_.Trim() -ne "" }
+
+    if (-not $avds -or $avds.Count -eq 0) {
+        Write-Host "[!] No AVDs found. Create one in Android Studio first:" -ForegroundColor Red
+        Write-Host "    Android Studio -> Tools -> Device Manager -> Create Device" -ForegroundColor Yellow
+        Write-Host "    Recommended: Pixel 6, API 31, x86_64" -ForegroundColor Gray
+        exit 1
+    }
+
+    # List available AVDs
+    Write-Host "Available AVDs:" -ForegroundColor Cyan
+    $i = 1
+    foreach ($avd in $avds) {
+        Write-Host "  [$i] $avd" -ForegroundColor White
+        $i++
+    }
+
+    # Pick the first AVD (or let user choose if multiple)
+    $selectedAvd = if ($avds -is [string]) { $avds } else { $avds[0] }
+    Write-Host ""
+    Write-Host "[*] Launching emulator: $selectedAvd" -ForegroundColor Cyan
+
+    # Launch emulator in background
+    Start-Process -FilePath "emulator" -ArgumentList "-avd", $selectedAvd -WindowStyle Normal
+    Write-Host "[*] Waiting for emulator to boot..." -ForegroundColor Yellow
+
+    # Wait up to 120 seconds for emulator to appear
+    $timeout = 120
+    $elapsed = 0
+    $booted = $false
+    while ($elapsed -lt $timeout) {
+        Start-Sleep -Seconds 5
+        $elapsed += 5
+        $checkDevices = cmd /c "adb devices 2>&1"
+        $checkConnected = $checkDevices | Select-String "device$"
+        if ($checkConnected) {
+            Write-Host "[+] Emulator connected after ${elapsed}s!" -ForegroundColor Green
+            $booted = $true
+            break
+        }
+        Write-Host "    ... waiting (${elapsed}s / ${timeout}s)" -ForegroundColor Gray
+    }
+
+    if (-not $booted) {
+        Write-Host "[!] Emulator did not connect within ${timeout}s." -ForegroundColor Red
+        Write-Host "    Try launching it manually from Android Studio." -ForegroundColor Yellow
+        exit 1
+    }
+
+    # Wait a bit more for full boot
+    Write-Host "[*] Waiting for emulator to fully boot..." -ForegroundColor Yellow
+    cmd /c "adb wait-for-device 2>&1" | Out-Null
+    Start-Sleep -Seconds 10
+    Write-Host "[+] Emulator is ready!" -ForegroundColor Green
 }
 
-# -- Step 5: Verify Frida Server --
+# -- Step 5: Run BrutDroid for rooting and Frida setup --
+Write-Host ""
+Write-Host "--- Running BrutDroid for emulator configuration ---" -ForegroundColor Yellow
+Write-Host "Follow these steps in BrutDroid:" -ForegroundColor Cyan
+Write-Host "  1. Root Emulator            (Menu 2)" -ForegroundColor White
+Write-Host "     - Installs Magisk and patches system image" -ForegroundColor Gray
+Write-Host "  2. Install Tools            (Menu 3)" -ForegroundColor White
+Write-Host "     - Installs frida-tools, objection, etc." -ForegroundColor Gray
+Write-Host "  3. Configure Emulator       (Menu 4)" -ForegroundColor White
+Write-Host "     - Install Frida Server on device" -ForegroundColor Gray
+Write-Host "     - Install Burp Certificate (optional)" -ForegroundColor Gray
+Write-Host ""
+
+Push-Location $BrutDroidDir
+python BrutDroid.py
+Pop-Location
+
+# -- Step 6: Verify Frida Server --
 Write-Host ""
 Write-Host "--- Verifying Frida Server ---" -ForegroundColor Yellow
 $fridaCheck = & frida-ps -U 2>$null
