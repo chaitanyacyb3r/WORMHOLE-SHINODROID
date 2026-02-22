@@ -12,7 +12,7 @@
 # After setup, the watcher handles everything automatically.
 # ================================================================
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 $BrutDroidDir = Join-Path $env:USERPROFILE "Documents\git clones\BrutDroid"
 
 Write-Host ""
@@ -31,7 +31,7 @@ if (-not (Test-Path (Join-Path $BrutDroidDir "BrutDroid.py"))) {
 Write-Host "[+] BrutDroid found at: $BrutDroidDir" -ForegroundColor Green
 
 # -- Step 2: Verify ADB --
-$adbVersion = & adb version 2>$null
+$adbVersion = cmd /c "adb version 2>&1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[!] ADB not found in PATH. Install Android SDK Platform-Tools." -ForegroundColor Red
     exit 1
@@ -49,7 +49,7 @@ Write-Host "[+] Frida $fridaVersion available" -ForegroundColor Green
 # -- Step 4: Check for emulator --
 Write-Host ""
 Write-Host "--- Checking for connected emulator ---" -ForegroundColor Yellow
-$devices = & adb devices 2>$null
+$devices = cmd /c "adb devices 2>&1"
 $connected = $devices | Select-String "device$"
 
 if ($connected) {
