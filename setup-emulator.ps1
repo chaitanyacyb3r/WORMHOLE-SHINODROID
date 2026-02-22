@@ -17,11 +17,11 @@ $BrutDroidDir = Join-Path $env:USERPROFILE "Documents\git clones\BrutDroid"
 
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host "  OpenClaw Security — Emulator Setup (One-Time)"         -ForegroundColor Cyan
+Write-Host "  WORMHOLE // ShinobiDroid - Emulator Setup (One-Time)" -ForegroundColor Cyan
 Write-Host "========================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# ── Step 1: Verify BrutDroid ──────────────────────────────────────
+# -- Step 1: Verify BrutDroid --
 if (-not (Test-Path (Join-Path $BrutDroidDir "BrutDroid.py"))) {
     Write-Host "[!] BrutDroid not found at: $BrutDroidDir" -ForegroundColor Red
     Write-Host "    Clone it first:" -ForegroundColor Yellow
@@ -30,7 +30,7 @@ if (-not (Test-Path (Join-Path $BrutDroidDir "BrutDroid.py"))) {
 }
 Write-Host "[+] BrutDroid found at: $BrutDroidDir" -ForegroundColor Green
 
-# ── Step 2: Verify ADB ───────────────────────────────────────────
+# -- Step 2: Verify ADB --
 $adbVersion = & adb version 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[!] ADB not found in PATH. Install Android SDK Platform-Tools." -ForegroundColor Red
@@ -38,7 +38,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "[+] ADB available" -ForegroundColor Green
 
-# ── Step 3: Verify Frida ─────────────────────────────────────────
+# -- Step 3: Verify Frida --
 $fridaVersion = & frida --version 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[!] Frida not found. Install: pip install frida-tools" -ForegroundColor Red
@@ -46,7 +46,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "[+] Frida $fridaVersion available" -ForegroundColor Green
 
-# ── Step 4: Check for emulator ───────────────────────────────────
+# -- Step 4: Check for emulator --
 Write-Host ""
 Write-Host "--- Checking for connected emulator ---" -ForegroundColor Yellow
 $devices = & adb devices 2>$null
@@ -77,7 +77,7 @@ if ($connected) {
     Pop-Location
 }
 
-# ── Step 5: Verify Frida Server ──────────────────────────────────
+# -- Step 5: Verify Frida Server --
 Write-Host ""
 Write-Host "--- Verifying Frida Server ---" -ForegroundColor Yellow
 $fridaCheck = & frida-ps -U 2>$null
@@ -85,15 +85,15 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "[+] Frida server is running on emulator!" -ForegroundColor Green
     Write-Host ""
     Write-Host "========================================================" -ForegroundColor Green
-    Write-Host "  SETUP COMPLETE! You can now run the watcher:"          -ForegroundColor Green
-    Write-Host "    cd OPENCLAW-SECURITY-INTEGRITY"                      -ForegroundColor White
-    Write-Host "    npm start"                                            -ForegroundColor White
-    Write-Host ""
-    Write-Host "  Drop APKs in: C:\MobSF-Scans\inbox"                   -ForegroundColor White
-    Write-Host "  Reports in:   C:\MobSF-Scans\reports"                  -ForegroundColor White
+    Write-Host "  SETUP COMPLETE! You can now run the watcher:" -ForegroundColor Green
+    Write-Host "    cd wormhole-shinobidroid" -ForegroundColor White
+    Write-Host "    npm start" -ForegroundColor White
+    Write-Host "" -ForegroundColor White
+    Write-Host "  Drop APKs in: C:\MobSF-Scans\inbox" -ForegroundColor White
+    Write-Host "  Reports in:   C:\MobSF-Scans\reports" -ForegroundColor White
     Write-Host "========================================================" -ForegroundColor Green
 } else {
     Write-Host "[!] Frida server not detected on emulator." -ForegroundColor Yellow
     Write-Host "    Run BrutDroid -> Menu 5 (Run Frida Server)" -ForegroundColor Yellow
-    Write-Host "    Or manually: adb shell su -c 'nohup /data/local/tmp/frida-server &'" -ForegroundColor Gray
+    Write-Host "    Or manually: adb shell su -c 'nohup /data/local/tmp/frida-server'" -ForegroundColor Gray
 }
