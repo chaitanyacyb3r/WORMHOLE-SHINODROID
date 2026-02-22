@@ -1,19 +1,21 @@
-# OpenClaw Security Integrity
+# WORMHOLE // ShinobiDroid 忍ドロイド
 
-> Automated Android penetration testing pipeline: **MobSF** (static) + **Frida** (dynamic) + **BrutDroid** (emulator setup)
+> **Automated Android penetration testing pipeline** by WORMHOLE Security
+>
+> MobSF (static) + Frida (dynamic) + BrutDroid (emulator setup)
 
 ## Architecture
 
 ```
 APK dropped in C:\MobSF-Scans\inbox
-  │
-  ├─→ MobSF Static Analysis
-  │     └─ report.json + report.pdf
-  │
-  └─→ Frida Dynamic Analysis (if emulator running)
-        └─ frida-results.json
-  │
-  └─→ All saved to C:\MobSF-Scans\reports\<app>-<timestamp>\
+  |
+  +---> MobSF Static Analysis
+  |       +-- report.json + report.pdf
+  |
+  +---> Frida Dynamic Analysis (if emulator running)
+          +-- frida-results.json
+  |
+  +---> All saved to C:\MobSF-Scans\reports\<app>-<timestamp>\
 ```
 
 ## Quick Start
@@ -21,14 +23,8 @@ APK dropped in C:\MobSF-Scans\inbox
 ### 1. One-Time Setup (Emulator + Frida Server)
 
 ```powershell
-# Run the guided setup script
 .\setup-emulator.ps1
 ```
-
-This uses BrutDroid to:
-- Create a virtual device (API 31, x86_64)
-- Root the emulator with Magisk
-- Install Frida server on the emulator
 
 ### 2. Start MobSF
 
@@ -37,21 +33,21 @@ cd C:\Users\elliot\Documents\Mobile-Security-Framework-MobSF
 .\run.bat
 ```
 
-### 3. Start the Watcher
+### 3. Start ShinobiDroid
 
 ```powershell
-cd C:\Users\elliot\Documents\OPENCLAW-SECURITY-INTEGRITY
+cd wormhole-shinobidroid
 npm start
 ```
 
 ### 4. Scan an APK
 
-Drop any `.apk` file into `C:\MobSF-Scans\inbox` — the watcher will:
+Drop any `.apk` file into `C:\MobSF-Scans\inbox` - the pipeline will:
 
-1. **Upload to MobSF** → static analysis (permissions, code analysis, manifest)
-2. **Install on emulator** → if an emulator is connected
-3. **Run Frida scripts** → SSL pinning bypass, root detection bypass, combined
-4. **Save all reports** → `C:\MobSF-Scans\reports\<app>-<timestamp>\`
+1. **Upload to MobSF** - static analysis (permissions, code analysis, manifest)
+2. **Install on emulator** - if an emulator is connected
+3. **Run Frida scripts** - SSL pinning bypass, root detection bypass, combined
+4. **Save all reports** - `C:\MobSF-Scans\reports\<app>-<timestamp>\`
 
 ## Reports Generated Per Scan
 
@@ -73,44 +69,39 @@ Sourced from [BrutDroid](https://github.com/Brut-Security/BrutDroid):
 
 ## Configuration
 
-Edit `.env`:
+Copy `.env.example` to `.env` and fill in your values:
 
 ```properties
-# MobSF
-MOBSF_API_KEY=69c46e5f7783c478d23feb4bf37104573bfc4714787cd154a9ffba440f22e2c9
+MOBSF_API_KEY=your_api_key_here
 MOBSF_URL=http://127.0.0.1:8000
-
-# Folder paths
-APK_INBOX_DIR=C:\MobSF-Scans\inbox
-REPORTS_OUTPUT_DIR=C:\MobSF-Scans\reports
-
-# Telegram Bot (optional)
-TELEGRAM_BOT_TOKEN=your-bot-token-here
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_ALLOWED_CHATS=your_chat_id
 ```
-
-## API Key Locations
-
-| Key | File | Field |
-|-----|------|-------|
-| MobSF API Key | `.env` | `MOBSF_API_KEY=` |
-| MobSF API Key | `~/.openclaw/openclaw.json` | `plugins.entries.mobsf.config.mobsfApiKey` |
-| Gemini API Key | `~/.openclaw/openclaw.json` | `models.providers.google.apiKey` |
 
 ## Project Structure
 
 ```
-OPENCLAW-SECURITY-INTEGRITY/
-├── watcher.mjs              # Main service (folder watch + Telegram + Frida)
-├── dynamic-analyzer.mjs     # Frida + ADB automation module
-├── setup-emulator.ps1       # One-time emulator setup (uses BrutDroid)
-├── scripts/
-│   ├── SSL-BYE.js           # SSL pinning bypass
-│   ├── ROOTER.js            # Root detection bypass
-│   └── PintooR.js           # Combined bypass
-├── .env                     # Configuration
-├── .env.example             # Config template
-├── package.json             # Node.js dependencies
-└── README.md                # This file
+wormhole-shinobidroid/
++-- watcher.mjs              # Main service (folder watch + Telegram + Frida)
++-- dynamic-analyzer.mjs     # Frida + ADB automation module
++-- setup-emulator.ps1       # One-time emulator setup (uses BrutDroid)
++-- harden-firewall.ps1      # Security hardening (firewall rules)
++-- scripts/
+|   +-- SSL-BYE.js           # SSL pinning bypass
+|   +-- ROOTER.js            # Root detection bypass
+|   +-- PintooR.js           # Combined bypass
++-- .env.example             # Config template (copy to .env)
++-- .gitignore               # Excludes secrets from git
++-- package.json             # Node.js dependencies
++-- ARCHITECTURE.md          # Full technical documentation
++-- README.md                # This file
+```
+
+## Security Hardening
+
+Run as Administrator to apply firewall rules:
+```powershell
+.\harden-firewall.ps1
 ```
 
 ## Troubleshooting
@@ -120,4 +111,8 @@ OPENCLAW-SECURITY-INTEGRITY/
 | No emulator connected | Start Android Studio emulator, verify with `adb devices` |
 | Frida server not running | Run: `adb shell su -c 'nohup /data/local/tmp/frida-server &'` |
 | MobSF 500 errors | Check `~/.MobSF/debug.log`, re-run migrations if needed |
-| Dynamic analysis skipped | Normal if no emulator — MobSF static scan still runs |
+| Dynamic analysis skipped | Normal if no emulator - MobSF static scan still runs |
+
+---
+
+*Built with by WORMHOLE Security*

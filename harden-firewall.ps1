@@ -1,10 +1,10 @@
 # ============================================================
-# OpenClaw Security Integrity - Firewall Hardening
+# WORMHOLE // ShinobiDroid - Firewall Hardening
 # Run as Administrator: Right-click -> Run as Administrator
 # ============================================================
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "  Firewall Hardening - OpenClaw Security Integrity" -ForegroundColor Cyan
+Write-Host "  Firewall Hardening - WORMHOLE // ShinobiDroid" -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
 

@@ -1,5 +1,5 @@
 # ================================================================
-# OpenClaw Security Integrity — Emulator Setup Script
+# WORMHOLE // ShinobiDroid - Emulator Setup Script
 # Uses BrutDroid for one-time Android emulator setup
 # ================================================================
 #

@@ -1,5 +1,5 @@
 /**
- * OpenClaw ↔ MobSF Bridge — APK Folder Watcher + Telegram Bot + Frida
+ * WORMHOLE // ShinobiDroid 忍ドロイド — Automated Android Pentesting Pipeline
  *
  * Pipeline per APK:
  *   Upload → MobSF Static Scan → JSON+PDF Reports
@@ -572,7 +572,7 @@ async function main() {
     await mkdir(REPORTS_DIR, { recursive: true });
 
     log("info", `╔══════════════════════════════════════════════════════╗`);
-    log("info", `║  OpenClaw ↔ MobSF Bridge — Security Scanner         ║`);
+    log("info", `║  WORMHOLE // ShinobiDroid 忍ドロイド               ║`);
     log("info", `╠══════════════════════════════════════════════════════╣`);
     log("info", `║  MobSF URL:  ${MOBSF_URL.padEnd(40)}║`);
     log("info", `║  Inbox:      ${APK_INBOX_DIR.padEnd(40).slice(0, 40)}║`);

@@ -1,7 +1,7 @@
 {
-  "name": "openclaw-mobsf-bridge",
+  "name": "wormhole-shinobidroid",
   "version": "1.0.0",
-  "description": "APK folder watcher for MobSF auto-scanning via OpenClaw",
+  "description": "WORMHOLE // ShinobiDroid \u5fcd\u30c9\u30ed\u30a4\u30c9 \u2014 Automated Android pentesting pipeline (MobSF + Frida + BrutDroid)",
   "type": "module",
   "private": true,
   "main": "watcher.mjs",

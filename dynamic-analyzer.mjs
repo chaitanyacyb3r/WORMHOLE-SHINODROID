@@ -1,5 +1,5 @@
 /**
- * Dynamic Analyzer Module — Frida + ADB Automation
+ * ShinobiDroid 忍ドロイド — Dynamic Analyzer Module (Frida + ADB)
  *
  * Automates dynamic analysis of Android APKs:
  *   1. Checks for connected emulator via ADB
