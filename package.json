@@ -1,0 +1,20 @@
+{
+  "name": "openclaw-mobsf-bridge",
+  "version": "1.0.0",
+  "description": "APK folder watcher for MobSF auto-scanning via OpenClaw",
+  "type": "module",
+  "private": true,
+  "main": "watcher.mjs",
+  "scripts": {
+    "start": "node watcher.mjs",
+    "watch": "node watcher.mjs"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.0",
+    "dotenv": "^16.4.0",
+    "node-telegram-bot-api": "^0.67.0"
+  }
+}
