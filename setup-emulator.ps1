@@ -1,94 +1,91 @@
 # ================================================================
 # WORMHOLE // ShinobiDroid - Emulator Setup Script
-# Uses BrutDroid for one-time Android emulator setup
+# Automates: emulator launch, Frida server install, Frida start
 # ================================================================
 #
 # Prerequisites:
 #   - Android Studio installed with SDK Platform-Tools
-#   - Python 3.9+ installed
-#   - BrutDroid cloned to Documents\git clones\BrutDroid
+#   - Python 3.9+ with frida-tools (pip install frida-tools)
+#   - At least one AVD created in Android Studio
 #
-# This script guides you through the one-time setup steps.
-# After setup, the watcher handles everything automatically.
+# This script automates the full lab setup:
+#   Step 1: Verify tools (ADB, Frida)
+#   Step 2: Launch emulator (if not running)
+#   Step 3: Detect architecture + install Frida server
+#   Step 4: Start Frida server
+#   Step 5: Verify everything works
 # ================================================================
 
 $ErrorActionPreference = "Continue"
-$BrutDroidDir = Join-Path $env:USERPROFILE "Documents\git clones\BrutDroid"
 
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host "  WORMHOLE // ShinobiDroid - Emulator Setup (One-Time)" -ForegroundColor Cyan
+Write-Host "  WORMHOLE // ShinobiDroid - Automated Lab Setup" -ForegroundColor Cyan
 Write-Host "========================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# -- Step 1: Verify BrutDroid --
-if (-not (Test-Path (Join-Path $BrutDroidDir "BrutDroid.py"))) {
-    Write-Host "[!] BrutDroid not found at: $BrutDroidDir" -ForegroundColor Red
-    Write-Host "    Clone it first:" -ForegroundColor Yellow
-    Write-Host '    git clone https://github.com/Brut-Security/BrutDroid.git "Documents\git clones\BrutDroid"'
-    exit 1
-}
-Write-Host "[+] BrutDroid found at: $BrutDroidDir" -ForegroundColor Green
+# -- Step 1: Verify tools --
+Write-Host "[Step 1/5] Verifying tools..." -ForegroundColor Yellow
 
-# -- Step 2: Verify ADB --
-$adbVersion = cmd /c "adb version 2>&1"
+# ADB
+$adbCheck = cmd /c "adb version 2>&1"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "[!] ADB not found in PATH. Install Android SDK Platform-Tools." -ForegroundColor Red
+    Write-Host "  [FAIL] ADB not found. Install Android SDK Platform-Tools." -ForegroundColor Red
     exit 1
 }
-Write-Host "[+] ADB available" -ForegroundColor Green
+Write-Host "  [OK] ADB available" -ForegroundColor Green
 
-# -- Step 3: Verify Frida --
-$fridaVersion = & frida --version 2>$null
+# Frida
+$fridaVersion = cmd /c "frida --version 2>&1"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "[!] Frida not found. Install: pip install frida-tools" -ForegroundColor Red
+    Write-Host "  [FAIL] Frida not found. Run: pip install frida-tools" -ForegroundColor Red
     exit 1
 }
-Write-Host "[+] Frida $fridaVersion available" -ForegroundColor Green
+$fridaVersion = $fridaVersion.Trim()
+Write-Host "  [OK] Frida $fridaVersion" -ForegroundColor Green
 
-# -- Step 4: Launch emulator if not already running --
+# emulator command
+$emulatorCheck = cmd /c "emulator -list-avds 2>&1"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  [WARN] emulator command not found in PATH." -ForegroundColor Yellow
+    Write-Host "         Add Android SDK emulator/ to your PATH." -ForegroundColor Gray
+}
+
+# -- Step 2: Launch emulator --
 Write-Host ""
-Write-Host "--- Checking for connected emulator ---" -ForegroundColor Yellow
+Write-Host "[Step 2/5] Checking emulator..." -ForegroundColor Yellow
+
 $devices = cmd /c "adb devices 2>&1"
 $connected = $devices | Select-String "device$"
 
 if ($connected) {
-    Write-Host "[+] Emulator already connected!" -ForegroundColor Green
-    cmd /c "adb devices"
+    Write-Host "  [OK] Emulator already running!" -ForegroundColor Green
 } else {
-    Write-Host "[!] No emulator connected. Launching one..." -ForegroundColor Yellow
-    Write-Host ""
+    Write-Host "  [--] No emulator found. Launching one..." -ForegroundColor Yellow
 
-    # Find available AVDs
     $avdList = cmd /c "emulator -list-avds 2>&1"
     $avds = $avdList | Where-Object { $_.Trim() -ne "" }
 
     if (-not $avds -or $avds.Count -eq 0) {
-        Write-Host "[!] No AVDs found. Create one in Android Studio first:" -ForegroundColor Red
-        Write-Host "    Android Studio -> Tools -> Device Manager -> Create Device" -ForegroundColor Yellow
-        Write-Host "    Recommended: Pixel 6, API 31, x86_64" -ForegroundColor Gray
+        Write-Host "  [FAIL] No AVDs found." -ForegroundColor Red
+        Write-Host "         Create one: Android Studio -> Tools -> Device Manager" -ForegroundColor Yellow
+        Write-Host "         Recommended: Pixel 6, API 31, x86_64" -ForegroundColor Gray
         exit 1
     }
 
-    # List available AVDs
-    Write-Host "Available AVDs:" -ForegroundColor Cyan
+    Write-Host "  Available AVDs:" -ForegroundColor Cyan
     $i = 1
     foreach ($avd in $avds) {
-        Write-Host "  [$i] $avd" -ForegroundColor White
+        Write-Host "    [$i] $avd" -ForegroundColor White
         $i++
     }
 
-    # Pick the first AVD (or let user choose if multiple)
     $selectedAvd = if ($avds -is [string]) { $avds } else { $avds[0] }
-    Write-Host ""
-    Write-Host "[*] Launching emulator: $selectedAvd" -ForegroundColor Cyan
+    Write-Host "  [--] Launching: $selectedAvd" -ForegroundColor Cyan
 
-    # Launch emulator in background
     Start-Process -FilePath "emulator" -ArgumentList "-avd", $selectedAvd -WindowStyle Normal
-    Write-Host "[*] Waiting for emulator to boot..." -ForegroundColor Yellow
 
-    # Wait up to 120 seconds for emulator to appear
-    $timeout = 120
+    $timeout = 180
     $elapsed = 0
     $booted = $false
     while ($elapsed -lt $timeout) {
@@ -97,60 +94,121 @@ if ($connected) {
         $checkDevices = cmd /c "adb devices 2>&1"
         $checkConnected = $checkDevices | Select-String "device$"
         if ($checkConnected) {
-            Write-Host "[+] Emulator connected after ${elapsed}s!" -ForegroundColor Green
             $booted = $true
             break
         }
-        Write-Host "    ... waiting (${elapsed}s / ${timeout}s)" -ForegroundColor Gray
+        Write-Host "       ... waiting (${elapsed}s / ${timeout}s)" -ForegroundColor Gray
     }
 
     if (-not $booted) {
-        Write-Host "[!] Emulator did not connect within ${timeout}s." -ForegroundColor Red
-        Write-Host "    Try launching it manually from Android Studio." -ForegroundColor Yellow
+        Write-Host "  [FAIL] Emulator did not start within ${timeout}s" -ForegroundColor Red
         exit 1
     }
 
-    # Wait a bit more for full boot
-    Write-Host "[*] Waiting for emulator to fully boot..." -ForegroundColor Yellow
+    Write-Host "  [OK] Emulator connected after ${elapsed}s" -ForegroundColor Green
+
+    # Wait for full boot
+    Write-Host "  [--] Waiting for boot to complete..." -ForegroundColor Yellow
     cmd /c "adb wait-for-device 2>&1" | Out-Null
     Start-Sleep -Seconds 10
-    Write-Host "[+] Emulator is ready!" -ForegroundColor Green
+    Write-Host "  [OK] Emulator fully booted" -ForegroundColor Green
 }
 
-# -- Step 5: Run BrutDroid for rooting and Frida setup --
+# -- Step 3: Install Frida Server on emulator --
 Write-Host ""
-Write-Host "--- Running BrutDroid for emulator configuration ---" -ForegroundColor Yellow
-Write-Host "Follow these steps in BrutDroid:" -ForegroundColor Cyan
-Write-Host "  1. Root Emulator            (Menu 2)" -ForegroundColor White
-Write-Host "     - Installs Magisk and patches system image" -ForegroundColor Gray
-Write-Host "  2. Install Tools            (Menu 3)" -ForegroundColor White
-Write-Host "     - Installs frida-tools, objection, etc." -ForegroundColor Gray
-Write-Host "  3. Configure Emulator       (Menu 4)" -ForegroundColor White
-Write-Host "     - Install Frida Server on device" -ForegroundColor Gray
-Write-Host "     - Install Burp Certificate (optional)" -ForegroundColor Gray
-Write-Host ""
+Write-Host "[Step 3/5] Installing Frida server on emulator..." -ForegroundColor Yellow
 
-Push-Location $BrutDroidDir
-python BrutDroid.py
-Pop-Location
+# Check if already installed
+$fridaExists = cmd /c "adb shell ls /data/local/tmp/frida-server 2>&1"
+if ($fridaExists -match "frida-server" -and $fridaExists -notmatch "No such file") {
+    Write-Host "  [OK] Frida server already installed on device" -ForegroundColor Green
+} else {
+    # Detect architecture
+    Write-Host "  [--] Detecting emulator architecture..." -ForegroundColor Yellow
+    $arch = (cmd /c "adb shell getprop ro.product.cpu.abi 2>&1").Trim()
+    Write-Host "  [OK] Architecture: $arch" -ForegroundColor Green
 
-# -- Step 6: Verify Frida Server --
+    # Download matching frida-server
+    $downloadUrl = "https://github.com/frida/frida/releases/download/$fridaVersion/frida-server-$fridaVersion-android-$arch.xz"
+    $xzFile = Join-Path $env:TEMP "frida-server-$fridaVersion.xz"
+    $serverFile = Join-Path $env:TEMP "frida-server"
+
+    Write-Host "  [--] Downloading frida-server $fridaVersion for $arch..." -ForegroundColor Yellow
+    Write-Host "       URL: $downloadUrl" -ForegroundColor Gray
+
+    try {
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $xzFile -UseBasicParsing
+        Write-Host "  [OK] Downloaded ($([math]::Round((Get-Item $xzFile).Length / 1MB, 1)) MB)" -ForegroundColor Green
+    } catch {
+        Write-Host "  [FAIL] Download failed: $_" -ForegroundColor Red
+        Write-Host "         Try manually: https://github.com/frida/frida/releases" -ForegroundColor Yellow
+        exit 1
+    }
+
+    # Extract .xz using Python (available since frida-tools requires Python)
+    Write-Host "  [--] Extracting..." -ForegroundColor Yellow
+    python -c "import lzma; open(r'$serverFile','wb').write(lzma.open(r'$xzFile').read())"
+    if (-not (Test-Path $serverFile)) {
+        Write-Host "  [FAIL] Extraction failed" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "  [OK] Extracted" -ForegroundColor Green
+
+    # Push to emulator
+    Write-Host "  [--] Pushing to emulator..." -ForegroundColor Yellow
+    cmd /c "adb push `"$serverFile`" /data/local/tmp/frida-server 2>&1"
+    cmd /c "adb shell chmod 755 /data/local/tmp/frida-server 2>&1"
+    Write-Host "  [OK] Frida server installed on emulator" -ForegroundColor Green
+
+    # Cleanup temp files
+    Remove-Item $xzFile -ErrorAction SilentlyContinue
+    Remove-Item $serverFile -ErrorAction SilentlyContinue
+}
+
+# -- Step 4: Start Frida Server --
 Write-Host ""
-Write-Host "--- Verifying Frida Server ---" -ForegroundColor Yellow
-$fridaCheck = & frida-ps -U 2>$null
+Write-Host "[Step 4/5] Starting Frida server..." -ForegroundColor Yellow
+
+# Check if already running
+$fridaRunning = cmd /c "adb shell su -c 'ps | grep frida-server' 2>&1"
+if ($fridaRunning -match "frida-server" -and $fridaRunning -notmatch "grep") {
+    Write-Host "  [OK] Frida server already running" -ForegroundColor Green
+} else {
+    Write-Host "  [--] Launching Frida server in background..." -ForegroundColor Yellow
+    cmd /c 'adb shell su -c "nohup /data/local/tmp/frida-server > /dev/null 2>&1 &"'
+    Start-Sleep -Seconds 3
+    Write-Host "  [OK] Frida server started" -ForegroundColor Green
+}
+
+# -- Step 5: Verify everything --
+Write-Host ""
+Write-Host "[Step 5/5] Verifying setup..." -ForegroundColor Yellow
+
+$fridaPs = cmd /c "frida-ps -U 2>&1"
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "[+] Frida server is running on emulator!" -ForegroundColor Green
+    Write-Host "  [OK] Frida connection verified - can see device processes!" -ForegroundColor Green
     Write-Host ""
     Write-Host "========================================================" -ForegroundColor Green
-    Write-Host "  SETUP COMPLETE! You can now run the watcher:" -ForegroundColor Green
-    Write-Host "    cd wormhole-shinobidroid" -ForegroundColor White
+    Write-Host "  LAB SETUP COMPLETE!" -ForegroundColor Green
+    Write-Host "" -ForegroundColor Green
+    Write-Host "  Emulator: running" -ForegroundColor White
+    Write-Host "  Frida:    running on device" -ForegroundColor White
+    Write-Host "" -ForegroundColor White
+    Write-Host "  Start the scanner:" -ForegroundColor Cyan
     Write-Host "    npm start" -ForegroundColor White
     Write-Host "" -ForegroundColor White
     Write-Host "  Drop APKs in: C:\MobSF-Scans\inbox" -ForegroundColor White
     Write-Host "  Reports in:   C:\MobSF-Scans\reports" -ForegroundColor White
     Write-Host "========================================================" -ForegroundColor Green
 } else {
-    Write-Host "[!] Frida server not detected on emulator." -ForegroundColor Yellow
-    Write-Host "    Run BrutDroid -> Menu 5 (Run Frida Server)" -ForegroundColor Yellow
-    Write-Host "    Or manually: adb shell su -c 'nohup /data/local/tmp/frida-server'" -ForegroundColor Gray
+    Write-Host "  [WARN] Cannot connect to Frida on device." -ForegroundColor Yellow
+    Write-Host "         The emulator may need to be rooted first." -ForegroundColor Yellow
+    Write-Host "" -ForegroundColor Yellow
+    Write-Host "  To root your emulator, run BrutDroid:" -ForegroundColor Cyan
+    Write-Host "    cd '$env:USERPROFILE\Documents\git clones\BrutDroid'" -ForegroundColor White
+    Write-Host "    python BrutDroid.py" -ForegroundColor White
+    Write-Host "    -> Select Menu 2 (Root Emulator)" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "  After rooting, run this setup script again." -ForegroundColor Cyan
 }
