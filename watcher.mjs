@@ -97,7 +97,7 @@ function log(level, msg) {
  * @param {function|null} onProgress - Callback for progress updates (e.g. Telegram status)
  * @returns {object} - { success, outDir, reportData, error }
  */
-async function scanFile(fileBuffer, fileName, onProgress = null) {
+export async function scanFile(fileBuffer, fileName, onProgress = null) {
     const ext = extname(fileName).toLowerCase();
 
     // Validate extension
@@ -602,8 +602,18 @@ async function main() {
         process.on("SIGBREAK", () => shutdown("SIGBREAK"));
     }
 }
+// Only run main() when this file is executed directly, NOT when imported.
+// This is the ESM equivalent of Python's `if __name__ == "__main__":`.
+// Without this guard, importing `scanFile` in mobsf.engine.mjs
+// would trigger MobSF connection + Telegram bot setup.
+import { argv } from "node:process";
+import { fileURLToPath } from "node:url";
 
-main().catch((err) => {
-    log("error", `Fatal: ${err.message}`);
-    process.exit(1);
-});
+const isMainModule = argv[1] && fileURLToPath(import.meta.url) === resolve(argv[1]);
+
+if (isMainModule) {
+    main().catch((err) => {
+        log("error", `Fatal: ${err.message}`);
+        process.exit(1);
+    });
+}

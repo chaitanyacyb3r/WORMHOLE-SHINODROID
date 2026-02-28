@@ -1,0 +1,16 @@
+{
+  "name": "md-to-pdf",
+  "version": "1.0.0",
+  "description": "Convert Markdown + Mermaid diagrams to a beautiful PDF",
+  "main": "convert.js",
+  "scripts": {
+    "convert": "node convert.js"
+  },
+  "dependencies": {
+    "marked": "^12.0.0",
+    "puppeteer": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

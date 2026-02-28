@@ -1,7 +1,7 @@
 {
   "name": "wormhole-shinobidroid",
   "version": "1.0.0",
-  "description": "WORMHOLE // ShinobiDroid \u5fcd\u30c9\u30ed\u30a4\u30c9 \u2014 Automated Android pentesting pipeline (MobSF + Frida + BrutDroid)",
+  "description": "WORMHOLE // ShinobiDroid 忍ドロイド — Automated Android pentesting pipeline (MobSF + Frida + BrutDroid)",
   "type": "module",
   "private": true,
   "main": "watcher.mjs",
@@ -13,8 +13,11 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.97.0",
     "chokidar": "^4.0.0",
     "dotenv": "^16.4.0",
-    "node-telegram-bot-api": "^0.67.0"
+    "node-telegram-bot-api": "^0.67.0",
+    "pdfkit": "^0.17.2",
+    "puppeteer-core": "^24.37.5"
   }
 }

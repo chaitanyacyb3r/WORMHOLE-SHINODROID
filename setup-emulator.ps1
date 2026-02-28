@@ -170,13 +170,16 @@ if ($fridaExists -match "frida-server" -and $fridaExists -notmatch "No such file
 Write-Host ""
 Write-Host "[Step 4/5] Starting Frida server..." -ForegroundColor Yellow
 
+# Ensure adb runs as root
+cmd /c "adb root 2>&1" | Out-Null
+
 # Check if already running
-$fridaRunning = cmd /c "adb shell su -c 'ps | grep frida-server' 2>&1"
+$fridaRunning = cmd /c "adb shell 'ps -A | grep frida-server' 2>&1"
 if ($fridaRunning -match "frida-server" -and $fridaRunning -notmatch "grep") {
     Write-Host "  [OK] Frida server already running" -ForegroundColor Green
 } else {
     Write-Host "  [--] Launching Frida server in background..." -ForegroundColor Yellow
-    cmd /c 'adb shell su -c "nohup /data/local/tmp/frida-server > /dev/null 2>&1 &"'
+    cmd /c 'adb shell "nohup /data/local/tmp/frida-server > /dev/null 2>&1 &"'
     Start-Sleep -Seconds 3
     Write-Host "  [OK] Frida server started" -ForegroundColor Green
 }

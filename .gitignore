@@ -1,33 +1,71 @@
 # =============================================
-# WORMHOLE // ShinobiDroid - .gitignore
+# ShinobiDroid 忍ドロイド — .gitignore
 # CRITICAL: Keep secrets out of version control
 # =============================================
 
 # ── Secrets & credentials ──────────────────────
 .env
-*.env.local
-*.env.production
+.env.local
+.env.*.local
+.env.production
+.env.development
 *.pem
 *.key
 *.p12
 *.jks
+_key.txt
+
+# ── OpenClaw secrets ────────────────────────────
+.openclaw/
+openclaw.json
+openclaw-secrets.env
 
 # ── Node.js ────────────────────────────────────
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.pnpm-debug.log*
+*.tgz
 
-# ── Scan data (large + potentially sensitive) ──
-# APK files are copyrighted / large binaries
+# ── Next.js (web/) ─────────────────────────────
+web/.next/
+web/out/
+web/build/
+web/.env.local
+web/.env.*.local
+
+# ── Supabase ───────────────────────────────────
+.supabase/
+supabase/.temp/
+
+# ── APK / Mobile binaries ───────────────────────
+# Do NOT commit APK files (copyrighted + large)
 *.apk
 *.ipa
 *.xapk
 *.aab
 *.appx
+*.dex
 
-# MobSF reports (contain app analysis data)
+# ── Scan output (large + potentially sensitive) ─
 reports/
+MobSF-Scans/
+*.json.bak
+
+# ── PDF reports ─────────────────────────────────
+# Scan reports stay local only
+ai-security-analysis.pdf
+ai-security-analysis.html
+dynamic-analysis-report.pdf
+frida-results.json
+
+# ── Temporary / runtime files ──────────────────
+*.tmp
+*.temp
+*.log
+logs/
+tmp/
 
 # ── OS / IDE ───────────────────────────────────
 .DS_Store
@@ -38,11 +76,4 @@ desktop.ini
 *.swp
 *.swo
 *~
-
-# ── Logs ───────────────────────────────────────
-*.log
-logs/
-
-# ── Temporary files ────────────────────────────
-_key.txt
-*.tmp
+ehthumbs.db
