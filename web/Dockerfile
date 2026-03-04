@@ -6,11 +6,14 @@
 #   2. builder — build Next.js with standalone output
 #   3. runner  — minimal production image (non-root)
 #
+# Build args required:
+#   NEXT_PUBLIC_SUPABASE_URL — your Supabase project URL
+#   NEXT_PUBLIC_SUPABASE_ANON_KEY — your Supabase anon key
+#
 # Security:
 #   - Runs as non-root user (nextjs:nodejs)
 #   - No dev dependencies in final image
 #   - No source code in final image (only standalone output)
-#   - Read-only filesystem compatible
 # ══════════════════════════════════════════════════════════════════════════════
 
 FROM node:22-alpine AS deps
@@ -27,12 +30,12 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build Next.js (standalone mode configured in next.config.ts)
-# Placeholder values for build-time only — Next.js prerendering needs these
-# to create a Supabase client, but actual values are injected at runtime.
+# Build args: real Supabase values baked into JS at compile time
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co
-ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key-for-build-only
+ENV NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
 RUN npm run build
 
 # ── Production Stage ──────────────────────────────────────────────────────────
@@ -53,10 +56,6 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Copy entrypoint script (replaces placeholder env vars at runtime)
-COPY --chown=nextjs:nodejs docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh
-
 USER nextjs
 
 EXPOSE 3000
@@ -65,7 +64,6 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
-# Entrypoint injects real NEXT_PUBLIC_* values, then starts the server
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["node", "server.js"]
+
 
