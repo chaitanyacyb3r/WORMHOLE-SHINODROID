@@ -19,6 +19,9 @@ const cspParts = [
 const ContentSecurityPolicy = cspParts.join("; ") + ";";
 
 const nextConfig: NextConfig = {
+  // Enable standalone output for Docker containerization
+  // Produces a self-contained build in .next/standalone (no node_modules needed)
+  output: "standalone",
   async headers() {
     return [
       {

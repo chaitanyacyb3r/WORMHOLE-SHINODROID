@@ -1,0 +1,36 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# ShinobiDroid — Docker Compose Override (Development)
+#
+# Automatically loaded by `docker compose up` alongside docker-compose.yml.
+# Adds hot-reload, source mounts, and dev-friendly settings.
+#
+# For production ONLY, use:
+#   docker compose -f docker-compose.yml up -d
+# ══════════════════════════════════════════════════════════════════════════════
+
+services:
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      target: deps
+    command: npm run dev
+    volumes:
+      # Mount source for hot-reload
+      - ./web/src:/app/src:ro
+      - ./web/public:/app/public:ro
+    environment:
+      - NODE_ENV=development
+    # Disable read-only in dev (Next.js needs to write .next/)
+    read_only: false
+
+  worker:
+    volumes:
+      # Mount engine/script source for live changes
+      - ./engines:/app/engines:ro
+      - ./scripts:/app/scripts:ro
+      - ./orchestrator.mjs:/app/orchestrator.mjs:ro
+      - ./supabase-worker.mjs:/app/supabase-worker.mjs:ro
+      - ./dynamic-analyzer.mjs:/app/dynamic-analyzer.mjs:ro
+    environment:
+      - NODE_ENV=development

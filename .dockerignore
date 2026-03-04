@@ -1,0 +1,60 @@
+# =============================================
+# ShinobiDroid — Docker Ignore
+# Keep build context small and secrets out
+# =============================================
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+
+# Dependencies (rebuilt in container)
+node_modules/
+web/node_modules/
+
+# Git
+.git/
+.gitignore
+
+# Build output
+web/.next/
+web/out/
+web/build/
+
+# APKs and scan output (large + sensitive)
+*.apk
+*.ipa
+*.xapk
+*.aab
+reports/
+MobSF-Scans/
+
+# PDFs and generated docs
+*.pdf
+ai-security-analysis.html
+frida-results.json
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Dev/scratch files
+*.txt
+*.log
+*.tmp
+*.temp
+logs/
+tmp/
+
+# Gemini / AI artifacts
+.gemini/
