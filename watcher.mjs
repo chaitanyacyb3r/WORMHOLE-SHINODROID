@@ -35,12 +35,17 @@ if (!MOBSF_API_KEY) {
     process.exit(1);
 }
 
-// Ensure loopback only
+// Ensure MOBSF_URL points to safe destinations only
+// Allows: localhost, 127.0.0.1, ::1, Docker service names (single-word),
+//         private IPs (10.x, 172.16-31.x, 192.168.x)
 try {
     const u = new URL(MOBSF_URL);
-    const host = u.hostname.replace(/^\[|\]$/g, "");
-    if (!["127.0.0.1", "localhost", "::1"].includes(host.toLowerCase())) {
-        console.error(`❌ Security: MOBSF_URL must point to localhost. Got: ${host}`);
+    const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(host);
+    const isDockerService = /^[a-z][a-z0-9_-]*$/.test(host) && !host.includes(".");
+    const isPrivateIP = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(host);
+    if (!isLoopback && !isDockerService && !isPrivateIP) {
+        console.error(`❌ Security: MOBSF_URL must point to localhost, Docker service, or private IP. Got: ${host}`);
         process.exit(1);
     }
 } catch {

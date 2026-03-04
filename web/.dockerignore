@@ -1,0 +1,8 @@
+# Web-specific Docker ignore (reduces context from 873MB to ~2MB)
+node_modules/
+.next/
+out/
+build/
+.env*
+!.env.example
+*.md

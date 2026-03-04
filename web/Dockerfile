@@ -28,7 +28,11 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Build Next.js (standalone mode configured in next.config.ts)
+# Placeholder values for build-time only — Next.js prerendering needs these
+# to create a Supabase client, but actual values are injected at runtime.
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key-for-build-only
 RUN npm run build
 
 # ── Production Stage ──────────────────────────────────────────────────────────
@@ -55,6 +59,6 @@ EXPOSE 3000
 
 # Health check — verifies the Next.js server responds
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1
+    CMD node -e "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 CMD ["node", "server.js"]
