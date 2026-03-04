@@ -2,11 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function GET(
     _req: NextRequest,
     { params }: { params: Promise<{ scanId: string }> }
 ) {
     const { scanId } = await params;
+    if (!UUID_REGEX.test(scanId)) {
+        return NextResponse.json({ error: "Invalid scan ID" }, { status: 400 });
+    }
 
     const cookieStore = await cookies();
     const supabase = createServerClient(

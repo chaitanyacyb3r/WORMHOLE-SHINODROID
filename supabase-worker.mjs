@@ -36,6 +36,29 @@ function elapsed(startMs) {
     return `${(ms / 1000).toFixed(1)}s`;
 }
 
+// ── Security Constants ───────────────────────────────────────────────────────
+const MAX_APK_SIZE = 100 * 1024 * 1024; // 100MB — must match client-side limit
+
+/**
+ * Sanitize error messages before storing in database.
+ * Strips file paths, stack traces, and internal details.
+ */
+function sanitizeErrorMessage(msg) {
+    if (!msg) return "An internal error occurred";
+    let sanitized = String(msg);
+    // Strip Windows/Unix file paths
+    sanitized = sanitized.replace(/[A-Z]:\\[^\s]+/gi, "[path]");
+    sanitized = sanitized.replace(/\/[\w./]+/g, (match) => {
+        // Keep URL-like paths, strip filesystem paths
+        if (match.includes("://") || match.startsWith("/api/") || match.startsWith("/v1/")) return match;
+        return "[path]";
+    });
+    // Strip stack traces (lines starting with "    at ")
+    sanitized = sanitized.replace(/\s+at\s+.+/g, "");
+    // Truncate to reasonable length
+    return sanitized.slice(0, 500);
+}
+
 // ── WARP Auto-Connect ────────────────────────────────────────────────────────
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -195,6 +218,10 @@ async function processScan(scan) {
     log("info", `╚══════════════════════════════════════════════════════════╝`);
 
     try {
+        // ── Step 0: Server-side file size validation (H3) ────────────────
+        if (scan.file_size && scan.file_size > MAX_APK_SIZE) {
+            throw new Error(`APK exceeds maximum size of ${formatBytes(MAX_APK_SIZE)} (got ${formatBytes(scan.file_size)})`);
+        }
         // ── Step 1: Update status ────────────────────────────────────────────
         log("step", "[1/6] Updating scan status → scanning...");
         await supabase.from("scans")
@@ -383,7 +410,7 @@ async function processScan(scan) {
         log("error", `Job failed: ${err.message}`);
         await supabase.from("scans").update({
             status: "failed",
-            error_message: err.message,
+            error_message: sanitizeErrorMessage(err.message),
             completed_at: new Date().toISOString(),
             dynamic_status: "failed",
         }).eq("id", scan.id);
@@ -460,7 +487,8 @@ async function startWorker() {
     console.log("  ╔═══════════════════════════════════════════════════╗");
     console.log("  ║   🥷 ShinobiDroid — Scan Worker                   ║");
     console.log("  ╠═══════════════════════════════════════════════════╣");
-    console.log(`  ║   Supabase: ${SUPABASE_URL.replace("https://", "").substring(0, 36).padEnd(36)}║`);
+    const maskedUrl = SUPABASE_URL.replace(/https:\/\/([^.]+)/, "https://$1").replace(/([a-z0-9]{8})[a-z0-9]+/, "$1****");
+    console.log(`  ║   Supabase: ${maskedUrl.replace("https://", "").substring(0, 36).padEnd(36)}║`);
     console.log(`  ║   Time:     ${new Date().toLocaleString().padEnd(36)}║`);
     console.log("  ╚═══════════════════════════════════════════════════╝");
     console.log();
@@ -493,6 +521,69 @@ async function startWorker() {
 
     // Start realtime subscription (throttled reconnect on error)
     subscribeRealtime();
+
+    // ── APK Auto-Cleanup (M3: enforce "deleted after 24 hours" claim) ────
+    cleanupOldApks(); // Run once at startup
+    setInterval(cleanupOldApks, 60 * 60_000); // Then every hour
+    log("ok", "🗑️  APK auto-cleanup scheduled (hourly, deletes APKs > 24h old)");
+}
+
+// ── APK Auto-Deletion ─────────────────────────────────────────────────────────
+const APK_RETENTION_HOURS = 24;
+
+async function cleanupOldApks() {
+    try {
+        const cutoff = new Date(Date.now() - APK_RETENTION_HOURS * 60 * 60_000).toISOString();
+
+        // Find completed/failed scans older than 24h that still have a file_path
+        const { data: oldScans, error: queryErr } = await supabase
+            .from("scans")
+            .select("id, file_path, user_id")
+            .in("status", ["completed", "failed"])
+            .lt("completed_at", cutoff)
+            .not("file_path", "is", null);
+
+        if (queryErr) {
+            log("warn", `APK cleanup query failed: ${queryErr.message}`);
+            return;
+        }
+
+        if (!oldScans || oldScans.length === 0) return;
+
+        log("info", `🗑️  APK cleanup: ${oldScans.length} scan(s) older than ${APK_RETENTION_HOURS}h found`);
+
+        let deleted = 0;
+        for (const scan of oldScans) {
+            try {
+                // Delete APK from storage
+                if (scan.file_path) {
+                    const { error: delErr } = await supabase.storage
+                        .from("apks")
+                        .remove([scan.file_path]);
+
+                    if (delErr) {
+                        log("warn", `  Failed to delete APK ${scan.id}: ${delErr.message}`);
+                        continue;
+                    }
+                }
+
+                // Nullify file_path in DB so we don't try again
+                await supabase.from("scans")
+                    .update({ file_path: null })
+                    .eq("id", scan.id);
+
+                deleted++;
+            } catch (err) {
+                log("warn", `  APK cleanup error for ${scan.id}: ${err.message}`);
+            }
+        }
+
+        if (deleted > 0) {
+            log("ok", `🗑️  APK cleanup: ${deleted} APK(s) deleted from storage`);
+        }
+    } catch (err) {
+        log("warn", `APK cleanup failed: ${err.message}`);
+    }
 }
 
 function subscribeRealtime() {
