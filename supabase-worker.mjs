@@ -59,61 +59,11 @@ function sanitizeErrorMessage(msg) {
     return sanitized.slice(0, 500);
 }
 
-// ── WARP Auto-Connect ────────────────────────────────────────────────────────
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { access } from "node:fs/promises";
-
-const execFileAsync = promisify(execFile);
-const WARP_CLI = "C:\\Program Files\\Cloudflare\\Cloudflare WARP\\warp-cli.exe";
-
-let warpAvailable = null; // null = unchecked, true/false = known
-
-async function isWarpInstalled() {
-    if (warpAvailable !== null) return warpAvailable;
-    try {
-        await access(WARP_CLI);
-        warpAvailable = true;
-    } catch {
-        warpAvailable = false;
-    }
-    return warpAvailable;
-}
-
-async function getWarpStatus() {
-    try {
-        const { stdout } = await execFileAsync(WARP_CLI, ["status"]);
-        if (stdout.includes("Connected")) return "connected";
-        return "disconnected";
-    } catch {
-        return "unknown";
-    }
-}
-
-async function connectWarp() {
-    try {
-        log("info", "🌐 Auto-connecting Cloudflare WARP...");
-        const { stdout } = await execFileAsync(WARP_CLI, ["connect"]);
-        if (stdout.includes("Success")) {
-            log("ok", "WARP connected successfully");
-            // Wait a moment for the tunnel to stabilize
-            await new Promise(r => setTimeout(r, 2000));
-            return true;
-        }
-        log("warn", `WARP connect response: ${stdout.trim()}`);
-        return false;
-    } catch (err) {
-        log("error", `WARP connect failed: ${err.message}`);
-        return false;
-    }
-}
-
 /**
- * Test if Supabase is reachable. If not, try to auto-connect WARP.
- * Returns true if connectivity is OK (or was fixed), false if still broken.
+ * Test if Supabase is reachable.
+ * Returns true if connectivity is OK, false otherwise.
  */
 async function ensureConnectivity() {
-    // Quick connectivity test using raw fetch (more reliable than Supabase client for timeout)
     try {
         const start = Date.now();
         const res = await fetch(`${SUPABASE_URL}/rest/v1/scans?select=id&limit=1`, {
@@ -128,50 +78,13 @@ async function ensureConnectivity() {
             log("ok", `Supabase connected successfully (${ms}ms)`);
             return true;
         }
-    } catch {
-        // Fall through to WARP check
-    }
-
-    // Supabase is unreachable — try WARP
-    log("warn", "Supabase unreachable from Node.js (ISP may be blocking Cloudflare)");
-
-    if (!(await isWarpInstalled())) {
-        log("error", "Cloudflare WARP is not installed. Install it from https://1.1.1.1/");
-        log("error", "Your ISP blocks direct connections to Supabase. WARP tunnels around this.");
+        log("warn", `Supabase responded with status ${res.status}`);
         return false;
-    }
-
-    const status = await getWarpStatus();
-    if (status === "connected") {
-        // WARP is connected but routes are stale — do a full reconnect cycle
-        log("warn", "WARP connected but Supabase unreachable — cycling WARP connection...");
-        try {
-            await execFileAsync(WARP_CLI, ["disconnect"]);
-            await new Promise(r => setTimeout(r, 2000)); // wait for disconnect
-        } catch { /* ignore disconnect errors */ }
-    }
-
-    // Auto-connect WARP
-    const connected = await connectWarp();
-    if (!connected) return false;
-
-    // Verify connectivity after WARP
-    try {
-        const start = Date.now();
-        const { error } = await supabase.from("scans").select("id").limit(1);
-        const ms = Date.now() - start;
-        if (!error) {
-            log("ok", `Supabase now reachable via WARP (${ms}ms)`);
-            return true;
-        }
-        log("error", `Still can't reach Supabase after WARP: ${error.message}`);
-        return false;
-    } catch (err) {
-        log("error", `Connectivity check failed after WARP: ${err.message}`);
+    } catch (e) {
+        log("warn", `Supabase unreachable: ${e.message}`);
         return false;
     }
 }
-
 
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>ShinobiDroid — Mermaid Chart Test</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f0b1a;
+    color: #e2e8f0;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 24px;
+  }
+  h1 { color: #a78bfa; margin-bottom: 4px; }
+  p  { color: #94a3b8; margin-top: 0; margin-bottom: 32px; }
+  h2 { color: #60a5fa; margin-top: 40px; margin-bottom: 12px; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+  .mermaid {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 24px;
+    margin: 16px 0;
+    border: 1px solid #312e81;
+    text-align: center;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+  }
+  .mermaid svg {
+    max-width: 100% !important;
+    height: auto !important;
+    display: block;
+    margin: 0 auto;
+  }
+</style>
+</head>
+<body>
+
+<h1>忍 ShinobiDroid — Chart Color Test</h1>
+<p>Testing Mermaid pie chart colors with the new vivid theme. Open this file in a browser.</p>
+
+<h2>Findings by Engine</h2>
+<div class="mermaid">
+pie title Findings by Engine
+    "MobSF" : 96
+    "Androwarn" : 1
+    "Firebase" : 1
+    "Frida" : 1
+    "Logcat" : 1
+</div>
+
+<h2>Category Breakdown</h2>
+<div class="mermaid">
+pie title Category Breakdown
+    "Code Security" : 48
+    "Permissions" : 22
+    "Network" : 14
+    "Cryptography" : 8
+    "Manifest" : 5
+    "Data Storage" : 3
+</div>
+
+<h2>Severity Distribution</h2>
+<div class="mermaid">
+pie title Severity Distribution
+    "Critical" : 3
+    "High" : 12
+    "Medium" : 31
+    "Low" : 18
+    "Info" : 36
+</div>
+
+<h2>Flowchart (bonus — also verify this looks good)</h2>
+<div class="mermaid">
+flowchart LR
+    A[📱 APK Upload] --> B[MobSF Static]
+    A --> C[Androwarn]
+    A --> D[Firebase Scanner]
+    B --> E[AI Engine]
+    C --> E
+    D --> E
+    E --> F[📄 PDF Report]
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'base',
+    themeVariables: {
+      pie1:  '#ef4444',
+      pie2:  '#f97316',
+      pie3:  '#eab308',
+      pie4:  '#22c55e',
+      pie5:  '#3b82f6',
+      pie6:  '#a855f7',
+      pie7:  '#ec4899',
+      pie8:  '#14b8a6',
+      pie9:  '#f43f5e',
+      pie10: '#84cc16',
+      pie11: '#06b6d4',
+      pie12: '#8b5cf6',
+      primaryColor:        '#e0e7ff',
+      primaryTextColor:    '#1e1b4b',
+      primaryBorderColor:  '#4f46e5',
+      lineColor:           '#6366f1',
+      secondaryColor:      '#f5f3ff',
+      tertiaryColor:       '#e0e7ff',
+      background:          '#ffffff',
+      mainBkg:             '#e0e7ff',
+      nodeBorder:          '#4f46e5',
+      edgeLabelBackground: '#f5f3ff',
+      titleColor:          '#1e1b4b',
+      fontSize:            '14px',
+      pieSectionTextColor: '#ffffff',
+      pieSectionTextSize:  '14px',
+      pieLegendTextColor:  '#1e1b4b',
+      pieLegendTextSize:   '13px',
+    },
+    flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' },
+    pie:       { useMaxWidth: true, textPosition: 0.75 },
+    securityLevel: 'loose',
+  });
+
+  mermaid.run();
+</script>
+</body>
+</html>

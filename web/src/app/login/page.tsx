@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Shield, Mail, Lock, ArrowRight, Github } from "lucide-react";
@@ -14,18 +14,40 @@ export default function LoginPage() {
     const router = useRouter();
     const supabase = createClient();
 
+    // Check for existing session on mount — prevents redirect loop
+    // when user already has an auth cookie from signup
+    useEffect(() => {
+        supabase.auth.getSession().then(({ data: { session }, error }) => {
+            if (!error && session) {
+                router.replace("/dashboard");
+            }
+        });
+    }, []);
+
     async function handleLogin(e: React.FormEvent) {
         e.preventDefault();
         setLoading(true);
         setError("");
 
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        try {
+            // 10s timeout to prevent infinite hang when Supabase is unreachable
+            const timeout = new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error("Connection timed out. Please check your internet connection and try again.")), 10000)
+            );
 
-        if (error) {
-            setError(error.message);
+            const authPromise = supabase.auth.signInWithPassword({ email, password });
+            const result = await Promise.race([authPromise, timeout]);
+
+            if (result.error) {
+                setError(result.error.message);
+            } else {
+                router.push("/dashboard");
+            }
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : "An unexpected error occurred";
+            setError(message);
+        } finally {
             setLoading(false);
-        } else {
-            router.push("/dashboard");
         }
     }
 

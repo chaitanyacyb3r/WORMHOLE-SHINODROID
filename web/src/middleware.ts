@@ -38,40 +38,52 @@ function isRateLimited(ip: string): boolean {
     return entry.count > RATE_LIMIT_MAX;
 }
 
-// ── JWT structure check ─────────────────────────────────────────────────
-// Validates the token looks like a real JWT (3 base64url segments)
-// This is NOT full cryptographic verification (Supabase handles that),
-// but blocks trivial cookie forgery with garbage values.
+// ── Auth cookie check ───────────────────────────────────────────────────
+// Supabase SSR stores session as base64-encoded JSON in cookies,
+// NOT as raw JWTs. We need to handle both formats.
 function isValidJwtStructure(token: string): boolean {
     const parts = token.split(".");
     if (parts.length !== 3) return false;
-
-    // Each part must be valid base64url (alphanumeric + - _ =)
     const base64urlRegex = /^[A-Za-z0-9_-]+=*$/;
     return parts.every((part) => part.length > 0 && base64urlRegex.test(part));
 }
 
-function getAuthToken(request: NextRequest): string | null {
-    // Supabase stores auth as sb-<project>-auth-token or as chunked cookies
-    // (sb-<project>-auth-token.0, sb-<project>-auth-token.1, etc.)
+function hasValidAuthCookie(request: NextRequest): boolean {
     const allCookies = request.cookies.getAll();
-
-    // Try single cookie first
-    const singleCookie = allCookies.find(
-        (c) => c.name.startsWith("sb-") && c.name.endsWith("-auth-token")
+    const authCookies = allCookies.filter(
+        (c) => c.name.startsWith("sb-") && c.name.includes("-auth-token")
     );
-    if (singleCookie?.value) return singleCookie.value;
 
-    // Try chunked cookies (Supabase splits large tokens)
-    const chunks = allCookies
-        .filter((c) => c.name.startsWith("sb-") && c.name.includes("-auth-token."))
+    if (authCookies.length === 0) return false;
+
+    // Reassemble chunked cookies (sb-xxx-auth-token.0, .1, .2, ...)
+    const chunked = authCookies
+        .filter((c) => /\.\d+$/.test(c.name))
         .sort((a, b) => a.name.localeCompare(b.name));
 
-    if (chunks.length > 0) {
-        return chunks.map((c) => c.value).join("");
+    const rawValue = chunked.length > 0
+        ? chunked.map((c) => c.value).join("")
+        : authCookies[0].value;
+
+    // Check 1: Raw value is a JWT (older Supabase versions)
+    if (isValidJwtStructure(rawValue)) return true;
+
+    // Check 2: Value is base64-encoded JSON containing access_token (Supabase SSR 0.8+)
+    try {
+        const decoded = atob(rawValue.replace(/-/g, "+").replace(/_/g, "/"));
+        const parsed = JSON.parse(decoded);
+        if (parsed.access_token && isValidJwtStructure(parsed.access_token)) return true;
+    } catch {
+        try {
+            const parsed = JSON.parse(rawValue);
+            if (parsed.access_token && isValidJwtStructure(parsed.access_token)) return true;
+        } catch {
+            // Not JSON either
+        }
     }
 
-    return null;
+    // Check 3: Cookie exists and has substantial content (fallback — Supabase validates server-side)
+    return rawValue.length > 20;
 }
 
 export async function middleware(request: NextRequest) {
@@ -91,19 +103,18 @@ export async function middleware(request: NextRequest) {
         }
     }
 
-    // ── Auth check with JWT structure validation ────────────────────────
-    const token = getAuthToken(request);
-    const hasValidAuth = token !== null && isValidJwtStructure(token);
+    // ── Auth check ──────────────────────────────────────────────────────
+    const hasAuth = hasValidAuthCookie(request);
 
     // Protect dashboard routes — redirect to login if no valid auth
-    if (!hasValidAuth && pathname.startsWith("/dashboard")) {
+    if (!hasAuth && pathname.startsWith("/dashboard")) {
         const url = request.nextUrl.clone();
         url.pathname = "/login";
         return NextResponse.redirect(url);
     }
 
     // Redirect logged-in users away from auth pages
-    if (hasValidAuth && (pathname === "/login" || pathname === "/signup")) {
+    if (hasAuth && (pathname === "/login" || pathname === "/signup")) {
         const url = request.nextUrl.clone();
         url.pathname = "/dashboard";
         return NextResponse.redirect(url);

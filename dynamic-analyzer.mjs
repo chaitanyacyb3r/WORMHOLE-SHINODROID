@@ -35,6 +35,17 @@ const SETUP_EMULATOR_SCRIPT = join(__dirname, "setup-emulator.ps1");
 // ADB command
 const ADB = "adb";
 
+// Target device serial — set by checkEmulator(), used by adb() to add -s flag
+let targetSerial = process.env.ANDROID_SERIAL || null;
+
+/**
+ * Build ADB args with -s <serial> when a specific device is targeted.
+ * Prevents "more than one device/emulator" errors.
+ */
+function adb(...args) {
+    return targetSerial ? ["-s", targetSerial, ...args] : [...args];
+}
+
 // ── Logging ─────────────────────────────────────────────────────────────────
 
 function log(level, msg) {
@@ -55,6 +66,7 @@ export async function checkEmulator() {
         for (const line of lines) {
             const parts = line.trim().split(/\s+/);
             if (parts.length >= 2 && parts[1] === "device") {
+                targetSerial = parts[0];
                 return { connected: true, device: parts[0] };
             }
         }
@@ -113,7 +125,7 @@ async function launchEmulator(onProgress) {
  */
 async function installApk(apkPath) {
     try {
-        const { stdout, stderr } = await execFileAsync(ADB, ["install", "-r", "-t", apkPath], {
+        const { stdout, stderr } = await execFileAsync(ADB, adb("install", "-r", "-t", apkPath), {
             timeout: 120_000,
         });
         if (stdout.includes("Success") || stdout.includes("success")) {
@@ -130,7 +142,7 @@ async function installApk(apkPath) {
  */
 async function uninstallApk(packageName) {
     try {
-        await execFileAsync(ADB, ["uninstall", packageName], { timeout: 30_000 });
+        await execFileAsync(ADB, adb("uninstall", packageName), { timeout: 30_000 });
     } catch {
         // Ignore — best effort cleanup
     }
@@ -164,22 +176,22 @@ async function getPackageName(mobsfReport, apkPath) {
  */
 async function ensureFridaServer() {
     // Attempt to restart adb as root (works on most AVDs where su does not)
-    try { await execFileAsync(ADB, ["root"], { timeout: 10_000 }); } catch { /* ignore */ }
+    try { await execFileAsync(ADB, adb("root"), { timeout: 10_000 }); } catch { /* ignore */ }
 
     // Kill any existing (possibly stale) frida-server
     try {
-        await execFileAsync(ADB, [
-            "shell", "pkill -f frida-server"
-        ], { timeout: 5000 });
+        await execFileAsync(ADB, adb(
+            "shell", "pkill -f frida-server"),
+            { timeout: 5000 });
         await new Promise(r => setTimeout(r, 1000));
     } catch { /* nothing to kill — that's fine */ }
 
     // Start fresh frida-server as a daemon
     log("info", "Starting fresh Frida server on emulator...");
     try {
-        await execFileAsync(ADB, [
-            "shell", "nohup /data/local/tmp/frida-server -D > /dev/null 2>&1 &"
-        ], { timeout: 10_000 });
+        await execFileAsync(ADB, adb(
+            "shell", "nohup /data/local/tmp/frida-server -D > /dev/null 2>&1 &"),
+            { timeout: 10_000 });
     } catch (err) {
         log("error", "Failed to start Frida server: " + err.message);
         return false;
@@ -340,19 +352,19 @@ function runFridaScript(packageName, scriptPath, scriptName) {
 
             // Step 1: Launch the app
             try {
-                await execFileAsync(ADB, [
+                await execFileAsync(ADB, adb(
                     "shell", "monkey",
                     "-p", packageName,
                     "-c", "android.intent.category.LAUNCHER",
                     "1"
-                ], { timeout: 10_000 });
+                ), { timeout: 10_000 });
             } catch {
                 // monkey failed — try am start with a common activity pattern
                 try {
-                    await execFileAsync(ADB, [
+                    await execFileAsync(ADB, adb(
                         "shell", "am", "start",
-                        "-n", `${packageName}/.MainActivity`,
-                    ], { timeout: 10_000 });
+                        "-n", `${packageName}/.MainActivity`
+                    ), { timeout: 10_000 });
                 } catch (e) {
                     log("warn", `  Could not launch app: ${e.message}`);
                 }
@@ -363,9 +375,9 @@ function runFridaScript(packageName, scriptPath, scriptName) {
 
             let fridaArgs;
             try {
-                const { stdout: pidOut } = await execFileAsync(ADB, [
+                const { stdout: pidOut } = await execFileAsync(ADB, adb(
                     "shell", "pidof", packageName
-                ], { timeout: 5000 });
+                ), { timeout: 5000 });
                 const pid = pidOut.trim().split(/\s+/)[0]; // Take first PID if multiple
                 if (pid && /^\d+$/.test(pid)) {
                     fridaArgs = ["-U", "-p", pid, "-l", scriptPath];
@@ -506,7 +518,7 @@ async function exerciseApp(packageName) {
             const batch = actions.slice(i, i + batchSize);
             const cmd = batch.join(" && sleep 0.15 && ");
             try {
-                await execFileAsync(ADB, ["shell", cmd], {
+                await execFileAsync(ADB, adb("shell", cmd), {
                     timeout: 15_000,
                 });
             } catch { /* individual batch failure is fine */ }

@@ -5,7 +5,7 @@
  * Usage: node convert.js input.md [output.pdf]
  */
 
-const fs   = require("fs");
+const fs = require("fs");
 const path = require("path");
 const puppeteer = require("puppeteer");
 const { marked } = require("marked");
@@ -19,7 +19,7 @@ if (args.length === 0) {
   process.exit(1);
 }
 
-const inputFile  = path.resolve(args[0]);
+const inputFile = path.resolve(args[0]);
 const outputFile = args[1]
   ? path.resolve(args[1])
   : inputFile.replace(/\.md$/i, ".pdf");
@@ -29,7 +29,7 @@ if (!fs.existsSync(inputFile)) {
   process.exit(1);
 }
 
-const markdownText = fs.readFileSync(inputFile, "utf8");
+const markdownText = fs.readFileSync(inputFile, "utf8").replace(/^\uFEFF/, "");
 
 // ─────────────────────────────────────────────
 // 1. Markdown → HTML
@@ -44,14 +44,21 @@ function escapeHtml(str) {
 }
 
 const renderer = new marked.Renderer();
-renderer.code = function (code, language) {
-  if (language === "mermaid") {
-    return `<div class="mermaid-wrapper"><pre class="mermaid">${escapeHtml(code)}</pre></div>`;
+// marked v12+: code() receives a single token object {text, lang, escaped}
+renderer.code = function (token) {
+  const text = token.text ?? token;          // v12 passes object; fallback for older
+  const lang = token.lang ?? arguments[1];   // v12: token.lang; older: 2nd arg
+  if (lang === "mermaid") {
+    return `<div class="mermaid-wrapper"><pre class="mermaid">${escapeHtml(text)}</pre></div>`;
   }
-  return `<pre><code class="language-${language || ""}">${escapeHtml(code)}</code></pre>`;
+  return `<pre><code class="language-${lang || ""}">${escapeHtml(text)}</code></pre>`;
 };
-marked.setOptions({ renderer });
-const bodyHtml = marked.parse(markdownText);
+marked.setOptions({
+  renderer,
+  mangle: false,   // don't mangle email addresses
+  headerIds: false,   // no auto id attrs on headings
+});
+const bodyHtml = marked.parse(markdownText, { breaks: false });
 
 // ─────────────────────────────────────────────
 // 2. Build HTML page
@@ -163,16 +170,202 @@ const html = `<!DOCTYPE html>
     height: auto !important;
   }
 
+  /* Force SVG background to white — headless Chrome can render
+     Mermaid's internal background rect as dark in PDF mode */
+  .mermaid-wrapper svg > rect:first-child,
+  .mermaid-wrapper svg rect.background {
+    fill: #ffffff !important;
+  }
+
+  /* Ensure pie legend text is always dark and readable */
+  .mermaid-wrapper svg text,
+  .mermaid-wrapper svg .legend text,
+  .mermaid-wrapper svg .pieOuterText {
+    fill: #1e1b4b !important;
+  }
+
+  /* Percentage labels inside slices — white for contrast on vivid colors */
+  .mermaid-wrapper svg .slice text,
+  .mermaid-wrapper svg .pieTitleText ~ g text {
+    fill: #ffffff !important;
+  }
+
+  /* ── Cover page ── */
+  .cover-page {
+    background: linear-gradient(145deg, #0f0c29, #1e1b4b, #312e81);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    page-break-after: always;
+    break-after: page;
+    margin: 0;
+    padding: 0;
+  }
+  .cover-inner {
+    text-align: center;
+    color: #ffffff;
+    padding: 60px 40px;
+    max-width: 600px;
+  }
+  .cover-logo {
+    font-size: 2.4em;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: #a5b4fc;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+  .cover-divider {
+    width: 80px;
+    height: 4px;
+    background: linear-gradient(90deg, #6366f1, #a855f7);
+    margin: 0 auto 28px;
+    border-radius: 2px;
+  }
+  .cover-title {
+    font-size: 3.2em;
+    font-weight: 700;
+    color: #ffffff;
+    letter-spacing: 0.02em;
+    line-height: 1.1;
+    margin-bottom: 12px;
+  }
+  .cover-sub {
+    font-size: 1.3em;
+    color: #c7d2fe;
+    font-weight: 400;
+    margin-bottom: 36px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .cover-tags {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 48px;
+  }
+  .cover-tags span {
+    background: rgba(99,102,241,0.25);
+    border: 1px solid rgba(165,180,252,0.4);
+    color: #c7d2fe;
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 0.85em;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+  }
+  .cover-confidential {
+    font-size: 0.75em;
+    color: #818cf8;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+  .cover-contact {
+    font-size: 0.95em;
+    color: #a5b4fc;
+    font-weight: 500;
+  }
+
   @media print {
     body { font-size: 13px; }
     .page { padding: 24px 32px; }
     h1, h2 { page-break-after: avoid; }
     pre, table, .mermaid-wrapper { page-break-inside: avoid; }
     .mermaid-wrapper { overflow: visible; }
+    .cover-page { min-height: 100vh; }
   }
+  /* ── Sequence diagram specific overrides ─────────────────────────── */
+  /* Force white background — the SVG background rect sits at various
+     levels depending on Mermaid version, so we target all of them */
+  .mermaid-wrapper svg > rect,
+  .mermaid-wrapper svg > g > rect:first-child,
+  .mermaid-wrapper svg > g > rect.background {
+    fill: #ffffff !important;
+  }
+
+  /* Actor / participant boxes (top + bottom) */
+  .mermaid-wrapper svg .actor {
+    fill: #eef2ff !important;
+    stroke: #4f46e5 !important;
+    stroke-width: 2px !important;
+  }
+  .mermaid-wrapper svg text.actor,
+  .mermaid-wrapper svg .actor > text {
+    fill: #1e1b4b !important;
+    font-weight: 600 !important;
+  }
+
+  /* Lifeline vertical lines */
+  .mermaid-wrapper svg .lifelineRect,
+  .mermaid-wrapper svg line.lifeline-line,
+  .mermaid-wrapper svg line[class*="lifeline"] {
+    stroke: #6366f1 !important;
+    stroke-width: 2px !important;
+  }
+
+  /* Message signal lines (solid ->> and dashed -->>) */
+  .mermaid-wrapper svg .messageLine0,
+  .mermaid-wrapper svg .messageLine1,
+  .mermaid-wrapper svg line.messageLine0,
+  .mermaid-wrapper svg line.messageLine1 {
+    stroke: #312e81 !important;
+    stroke-width: 2.5px !important;
+  }
+
+  /* Arrowhead markers (fill the polygon/path inside <marker>) */
+  .mermaid-wrapper svg defs marker path,
+  .mermaid-wrapper svg defs marker polygon {
+    fill: #312e81 !important;
+    stroke: #312e81 !important;
+  }
+
+  /* Message label text on arrows */
+  .mermaid-wrapper svg .messageText,
+  .mermaid-wrapper svg text.messageText {
+    fill: #1e1b4b !important;
+    stroke: none !important;
+  }
+
+  /* Note boxes */
+  .mermaid-wrapper svg rect.note,
+  .mermaid-wrapper svg .note rect {
+    fill: #fef9c3 !important;
+    stroke: #d97706 !important;
+  }
+  .mermaid-wrapper svg text.noteText,
+  .mermaid-wrapper svg .note text {
+    fill: #713f12 !important;
+  }
+
+  /* Activation boxes on lifelines */
+  .mermaid-wrapper svg rect.activation0,
+  .mermaid-wrapper svg rect.activation1,
+  .mermaid-wrapper svg rect.activation2 {
+    fill: #e0e7ff !important;
+    stroke: #4f46e5 !important;
+  }
+
 </style>
 </head>
 <body>
+<div class="cover-page">
+  <div class="cover-inner">
+    <div class="cover-logo">WORMHOLE // ShinobiDroid</div>
+    <div class="cover-divider"></div>
+    <div class="cover-title">Pitch Deck</div>
+    <div class="cover-sub">Seed Round &nbsp;&bull;&nbsp; 2026</div>
+    <div class="cover-tags">
+      <span>Android Security Intelligence</span>
+      <span>India-First SaaS</span>
+      <span>AI-Powered Reports</span>
+    </div>
+    <div class="cover-confidential">CONFIDENTIAL &nbsp;&mdash;&nbsp; For authorised recipients only</div>
+    <div class="cover-contact">support@wormhole.co.in</div>
+  </div>
+</div>
 <div class="page">
 ${bodyHtml}
 </div>
@@ -182,6 +375,25 @@ ${bodyHtml}
     startOnLoad: true,
     theme: 'base',
     themeVariables: {
+      // ── Pie chart slice colors — vivid and clearly distinct ──────────
+      pie1:  '#ef4444',   // red
+      pie2:  '#f97316',   // orange
+      pie3:  '#eab308',   // yellow-amber
+      pie4:  '#22c55e',   // green
+      pie5:  '#3b82f6',   // blue
+      pie6:  '#a855f7',   // purple
+      pie7:  '#ec4899',   // pink
+      pie8:  '#14b8a6',   // teal
+      pie9:  '#f43f5e',   // rose
+      pie10: '#84cc16',   // lime
+      pie11: '#06b6d4',   // cyan
+      pie12: '#8b5cf6',   // violet
+      // ── Pie text ─────────────────────────────────────────────────────
+      pieSectionTextColor: '#ffffff',
+      pieSectionTextSize:  '14px',
+      pieLegendTextColor:  '#1e1b4b',
+      pieLegendTextSize:   '13px',
+      // ── General theme ────────────────────────────────────────────────
       primaryColor:        '#eef2ff',
       primaryTextColor:    '#1e1b4b',
       primaryBorderColor:  '#4f46e5',
@@ -207,11 +419,19 @@ ${bodyHtml}
       noteTextColor:       '#713f12',
       fillType0:           '#eef2ff',
       fillType1:           '#f5f3ff',
+      // ── Sequence diagram specific variables ────────────────────────
+      signalColor:          '#312e81',   // arrow lines
+      signalTextColor:      '#1e1b4b',   // text labels on arrows (dark — bg is white)
+      actorLineColor:       '#6366f1',   // lifeline vertical lines
+      activationBkgColor:   '#e0e7ff',   // activation box fill
+      activationBorderColor:'#4f46e5',   // activation box border
+      labelBoxBorderColor:  '#4f46e5',
+      sequenceNumberColor:  '#ffffff',
     },
     flowchart:  { curve: 'basis', padding: 20, useMaxWidth: true },
     sequence:   { actorMargin: 60, useMaxWidth: true },
     gantt:      { useMaxWidth: true },
-    pie:        { useMaxWidth: true },
+    pie:        { useMaxWidth: true, textPosition: 0.75 },
     mindmap:    { useMaxWidth: true },
     timeline:   { useMaxWidth: true },
     gitGraph:   { useMaxWidth: true },
@@ -219,6 +439,7 @@ ${bodyHtml}
     fontSize:   14,
     securityLevel: 'loose',
   });
+
 </script>
 </body>
 </html>`;
@@ -276,49 +497,106 @@ const svgFix = () => {
   document.querySelectorAll(".mermaid-wrapper svg").forEach((svg) => {
 
     // ── Step 1: Nuke all clip-paths ──────────────────────────────────
-    // Remove clip-path attribute from every element that has one
-    svg.querySelectorAll("[clip-path]").forEach((el) => {
-      el.removeAttribute("clip-path");
-    });
-    // Remove the <clipPath> definition elements themselves
+    svg.querySelectorAll("[clip-path]").forEach((el) => el.removeAttribute("clip-path"));
     svg.querySelectorAll("clipPath").forEach((el) => el.remove());
-    // Also clear any inline style clip-path
     svg.querySelectorAll("[style]").forEach((el) => {
       if (el.style.clipPath) el.style.clipPath = "none";
     });
+    svg.style.overflow = "visible";
+    if (svg.parentElement) svg.parentElement.style.overflow = "visible";
 
     // ── Step 2: Measure the REAL bounding box ────────────────────────
-    // getBBox() returns the tight bounding box of all rendered content
-    // AFTER clip-paths have been removed, so it includes previously
-    // hidden overflow like long subgraph titles.
-    let bx = 0, by = 0, bw = 0, bh = 0;
+    // Three methods because getBBox() silently ignores <foreignObject>
+    // elements — which is EXACTLY what Mermaid uses for HTML-label nodes
+    // (htmlLabels:true). Without methods B and C, node labels get clipped.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+    function expand(x, y, w, h) {
+      if (w <= 0 || h <= 0) return;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + w);
+      maxY = Math.max(maxY, y + h);
+    }
+
+    // Method A: getBBox() on the SVG root — works for path, rect, text, g
+    try { const b = svg.getBBox(); expand(b.x, b.y, b.width, b.height); } catch (e) { }
+
+    // Method B: foreignObject explicit attributes.
+    // Mermaid always sets x/y/width/height on <foreignObject> nodes.
+    svg.querySelectorAll("foreignObject").forEach((fo) => {
+      expand(
+        parseFloat(fo.getAttribute("x") || "0"),
+        parseFloat(fo.getAttribute("y") || "0"),
+        parseFloat(fo.getAttribute("width") || "0"),
+        parseFloat(fo.getAttribute("height") || "0")
+      );
+    });
+
+    // Method C: getBoundingClientRect → SVG coordinate space.
+    // Catches subgraph title labels and any element missed by A+B.
     try {
-      const bbox = svg.getBBox();
-      bx = bbox.x;
-      by = bbox.y;
-      bw = bbox.width;
-      bh = bbox.height;
-    } catch (e) {
-      // getBBox can fail for hidden elements; fall back to attributes
-      bw = parseFloat(svg.getAttribute("width"))  || 800;
-      bh = parseFloat(svg.getAttribute("height")) || 400;
+      const svgR = svg.getBoundingClientRect();
+      if (svgR.width > 0 && svgR.height > 0) {
+        const vbParts = (svg.getAttribute("viewBox") || "").split(/\s+/).map(Number);
+        const vbW = (vbParts[2] > 0 ? vbParts[2] : svgR.width);
+        const scale = vbW / svgR.width;
+        svg.querySelectorAll("g, rect, text, foreignObject").forEach((el) => {
+          try {
+            const r = el.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) return;
+            expand(
+              (r.left - svgR.left) * scale,
+              (r.top - svgR.top) * scale,
+              r.width * scale,
+              r.height * scale
+            );
+          } catch (e) { }
+        });
+      }
+    } catch (e) { }
+
+    // Fallback: if all three methods failed, use SVG dimension attributes
+    if (minX === Infinity) {
+      minX = 0; minY = 0;
+      maxX = parseFloat(svg.getAttribute("width")) || 800;
+      maxY = parseFloat(svg.getAttribute("height")) || 400;
+    }
+
+    // ── Step 2b: Force background rect to white ─────────────────────
+    // CSS !important can't always override Mermaid's inline SVG fills in
+    // headless Chrome. We find the largest rect (almost certainly the
+    // diagram background) and force it to white via JS setAttribute.
+    let largestArea = 0;
+    let bgRect = null;
+    svg.querySelectorAll("rect").forEach((rect) => {
+      const w = parseFloat(rect.getAttribute("width") || "0");
+      const h = parseFloat(rect.getAttribute("height") || "0");
+      const area = w * h;
+      if (area > largestArea) { largestArea = area; bgRect = rect; }
+    });
+    if (bgRect && largestArea > 10000) {
+      bgRect.setAttribute("fill", "#ffffff");
+      bgRect.style.fill = "#ffffff";
+      bgRect.removeAttribute("stroke");
     }
 
     // ── Step 3: Set viewBox with generous padding ────────────────────
-    const pad = 16;
+    const pad = 50;
     svg.setAttribute(
       "viewBox",
-      `${bx - pad} ${by - pad} ${bw + pad * 2} ${bh + pad * 2}`
+      `${minX - pad} ${minY - pad} ${maxX - minX + pad * 2} ${maxY - minY + pad * 2}`
     );
     svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
     // ── Step 4: Remove hardcoded dimensions → CSS takes over ─────────
     svg.removeAttribute("width");
     svg.removeAttribute("height");
-    svg.style.display  = "block";
-    svg.style.width    = "100%";
+    svg.style.display = "block";
+    svg.style.width = "100%";
     svg.style.maxWidth = "100%";
-    svg.style.height   = "auto";
+    svg.style.height = "auto";
+    svg.style.overflow = "visible";
   });
 };
 
@@ -358,9 +636,9 @@ const svgFix = () => {
     return [...nodes].every((el) => el.querySelector("svg") !== null);
   }, { timeout: 30000 });
 
-  // Extra settle time — some complex diagrams (mindmap, sequence) need
-  // a moment after the SVG appears before all text elements are measured
-  await new Promise((r) => setTimeout(r, 1000));
+  // Extra settle time — complex diagrams need time after SVG appears
+  // for all foreignObject text elements to be fully measured.
+  await new Promise((r) => setTimeout(r, 2500));
 
   // Run the SVG fix inside the browser context
   await page.evaluate(svgFix);
@@ -373,7 +651,7 @@ const svgFix = () => {
     printBackground: true,
     margin: { top: "20mm", right: "18mm", bottom: "20mm", left: "18mm" },
     displayHeaderFooter: true,
-    headerTemplate: `<div style="font-size:9px;color:#aaa;width:100%;text-align:right;padding-right:18mm;font-family:sans-serif;">${path.basename(inputFile)}</div>`,
+    headerTemplate: `<div style="font-size:9px;color:#6366f1;width:100%;display:flex;justify-content:space-between;padding:0 18mm;font-family:sans-serif;font-weight:600;letter-spacing:0.04em;"><span>WORMHOLE // ShinobiDroid</span><span style="color:#aaa;font-weight:400;">Pitch Deck 2026 &nbsp;|&nbsp; Confidential</span></div>`,
     footerTemplate: `<div style="font-size:9px;color:#aaa;width:100%;text-align:center;font-family:sans-serif;">Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>`,
   });
 

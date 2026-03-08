@@ -22,6 +22,12 @@ import { createFinding } from "./_engine-interface.mjs";
 
 const execFileAsync = promisify(execFile);
 
+/** Build ADB args with -s <serial> when ANDROID_SERIAL is set. */
+function adbArgs(...args) {
+    const serial = process.env.ANDROID_SERIAL;
+    return serial ? ["-s", serial, ...args] : [...args];
+}
+
 // Patterns to scan for in logcat output
 const SENSITIVE_PATTERNS = [
     { re: /password\s*[=:]\s*\S+/i, title: "Password Leaked in Logs", sev: "critical" },
@@ -47,7 +53,14 @@ export default {
         try {
             const { stdout } = await execFileAsync("adb", ["devices"], { timeout: 5000 });
             const lines = stdout.split("\n").filter(l => l.includes("device") && !l.startsWith("List"));
-            return lines.length > 0;
+            if (lines.length > 0) {
+                const serial = lines[0].trim().split(/\s+/)[0];
+                if (serial && !process.env.ANDROID_SERIAL) {
+                    process.env.ANDROID_SERIAL = serial;
+                }
+                return true;
+            }
+            return false;
         } catch {
             return false;
         }
@@ -75,9 +88,9 @@ export default {
             // Get PID for the app
             let pid = null;
             try {
-                const { stdout } = await execFileAsync("adb", [
-                    "shell", "pidof", packageName,
-                ], { timeout: 5000 });
+                const { stdout } = await execFileAsync("adb", adbArgs(
+                    "shell", "pidof", packageName
+                ), { timeout: 5000 });
                 pid = stdout.trim();
             } catch {
                 // App might not be running; capture all logs instead
@@ -90,7 +103,7 @@ export default {
                 logcatArgs.push(`--pid=${pid}`);
             }
 
-            const { stdout: logOutput } = await execFileAsync("adb", logcatArgs, {
+            const { stdout: logOutput } = await execFileAsync("adb", adbArgs(...logcatArgs), {
                 timeout: 30_000,
                 maxBuffer: 10 * 1024 * 1024, // 10MB buffer
             });

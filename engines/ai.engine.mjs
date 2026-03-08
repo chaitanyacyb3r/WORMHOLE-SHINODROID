@@ -706,12 +706,21 @@ function markdownToHtml(markdownContent, appName) {
         }
 
         .mermaid {
-            background: var(--bg-secondary);
+            background: #ffffff;
             border-radius: 12px;
             padding: 24px;
             margin: 20px 0;
             border: 1px solid var(--border);
             text-align: center;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+        }
+
+        /* Make SVG inside mermaid blocks fill the container nicely */
+        .mermaid svg {
+            max-width: 100% !important;
+            height: auto !important;
+            display: block;
+            margin: 0 auto;
         }
 
         hr {
@@ -764,23 +773,50 @@ function markdownToHtml(markdownContent, appName) {
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"><\\/script>
 
     <script>
-        // Initialize Mermaid with dark theme
+        // Initialize Mermaid — use 'base' theme with explicit vivid pie colors
         mermaid.initialize({
             startOnLoad: false,
-            theme: 'dark',
+            theme: 'base',
             themeVariables: {
-                primaryColor: '#58a6ff',
-                primaryTextColor: '#e6edf3',
-                primaryBorderColor: '#30363d',
-                lineColor: '#8b949e',
-                secondaryColor: '#21262d',
-                tertiaryColor: '#161b22',
-                fontSize: '14px',
+                // ── Pie chart slice colors — vivid and clearly distinct ──────
+                pie1:  '#ef4444',   // red
+                pie2:  '#f97316',   // orange
+                pie3:  '#eab308',   // yellow
+                pie4:  '#22c55e',   // green
+                pie5:  '#3b82f6',   // blue
+                pie6:  '#a855f7',   // purple
+                pie7:  '#ec4899',   // pink
+                pie8:  '#14b8a6',   // teal
+                pie9:  '#f43f5e',   // rose
+                pie10: '#84cc16',   // lime
+                pie11: '#06b6d4',   // cyan
+                pie12: '#8b5cf6',   // violet
+                // ── General theme ───────────────────────────────────────────
+                primaryColor:        '#e0e7ff',
+                primaryTextColor:    '#1e1b4b',
+                primaryBorderColor:  '#4f46e5',
+                lineColor:           '#6366f1',
+                secondaryColor:      '#f5f3ff',
+                tertiaryColor:       '#e0e7ff',
+                background:          '#ffffff',
+                mainBkg:             '#e0e7ff',
+                nodeBorder:          '#4f46e5',
+                edgeLabelBackground: '#f5f3ff',
+                titleColor:          '#1e1b4b',
+                fontSize:            '14px',
+                pieSectionTextColor: '#ffffff',
+                pieSectionTextSize:  '14px',
+                pieLegendTextColor:  '#1e1b4b',
+                pieLegendTextSize:   '13px',
             },
-            flowchart: { useMaxWidth: true, htmlLabels: true },
-            pie: { useMaxWidth: true },
-            gantt: { useMaxWidth: true },
+            flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' },
+            pie:        { useMaxWidth: true, textPosition: 0.75 },
+            gantt:      { useMaxWidth: true },
+            sequence:   { useMaxWidth: true, actorMargin: 50 },
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+            securityLevel: 'loose',
         });
+
 
         // Render markdown
         const md = \`${escapedMd}\`;

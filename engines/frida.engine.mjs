@@ -29,7 +29,15 @@ export default {
 
             const { stdout } = await execFileAsync("adb", ["devices"], { timeout: 5000 });
             const lines = stdout.split("\n").filter(l => l.includes("device") && !l.startsWith("List"));
-            return lines.length > 0;
+            if (lines.length > 0) {
+                // Auto-set ANDROID_SERIAL to first device for subsequent -s calls
+                const serial = lines[0].trim().split(/\s+/)[0];
+                if (serial && !process.env.ANDROID_SERIAL) {
+                    process.env.ANDROID_SERIAL = serial;
+                }
+                return true;
+            }
+            return false;
         } catch {
             return false;
         }
