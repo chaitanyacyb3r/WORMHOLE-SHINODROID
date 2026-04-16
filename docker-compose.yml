@@ -109,6 +109,7 @@ services:
     #   - "8000:8000"
     environment:
       - MOBSF_API_ONLY=1
+      - MOBSF_API_KEY=${MOBSF_API_KEY}
     volumes:
       # Persist MobSF data (uploads, analysis cache) between restarts
       - mobsf-data:/home/mobsf/.MobSF
