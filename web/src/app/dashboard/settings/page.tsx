@@ -2,7 +2,7 @@
 
 import { User, Shield, Key, ArrowUpRight, CheckCircle2, Crown, Zap } from "lucide-react";
 import { useQuery } from "convex/react";
-import { api } from "../../../../convex/_generated/api";
+import { api } from "@convex/_generated/api";
 import { motion } from "framer-motion";
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
