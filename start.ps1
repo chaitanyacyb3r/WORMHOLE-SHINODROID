@@ -61,7 +61,7 @@ $ollamaReady = $false
 while (-not $ollamaReady -and $retry -lt $maxRetries) {
     $retry++
     try {
-        $result = docker exec Shinodroid-ollama curl -sf http://127.0.0.1:11434/api/tags 2>$null
+        $result = docker exec Shinodroid-ollama ollama list 2>$null
         if ($LASTEXITCODE -eq 0) {
             $ollamaReady = $true
         }
