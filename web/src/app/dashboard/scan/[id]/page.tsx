@@ -142,6 +142,7 @@ export default function ScanDetailPage() {
     // Convex reactive queries — auto-update in realtime, no channels needed!
     const scan = useQuery(api.scans.get, { id: scanId });
     const findings = useQuery(api.findings.listByScan, { scanId }) ?? [];
+    const reportUrls = useQuery(api.storage.getReportUrl, scan ? { scanId } : "skip");
     const loading = scan === undefined;
     const prevStatusRef = useRef<string | null>(null);
 
@@ -259,16 +260,16 @@ export default function ScanDetailPage() {
                 </div>
 
                 <div className="flex items-center gap-3 flex-wrap">
-                    {scan.status === "completed" && scan.reportStorageId && (
-                        <a href={`/api/report/${scan._id}`} target="_blank" rel="noopener noreferrer"
+                    {scan.status === "completed" && scan.reportStorageId && reportUrls?.static && (
+                        <a href={reportUrls.static} target="_blank" rel="noopener noreferrer"
                             className="btn-secondary flex items-center gap-2"
                             style={{ padding: "8px 16px", fontSize: "0.875rem", textDecoration: "none" }}
                             title="Download Static PDF Report">
                             <Download size={16} /> Static PDF
                         </a>
                     )}
-                    {scan.dynamicReportStorageId && (
-                        <a href={`/api/dynamic-report/${scan._id}`} target="_blank" rel="noopener noreferrer"
+                    {scan.dynamicReportStorageId && reportUrls?.dynamic && (
+                        <a href={reportUrls.dynamic} target="_blank" rel="noopener noreferrer"
                             className="btn-secondary flex items-center gap-2"
                             style={{ padding: "8px 16px", fontSize: "0.875rem", textDecoration: "none", borderColor: "#a78bfa" }}
                             title="Download Dynamic Analysis PDF">
