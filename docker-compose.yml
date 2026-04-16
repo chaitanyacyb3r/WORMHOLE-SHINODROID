@@ -67,6 +67,8 @@ services:
       - REPORTS_OUTPUT_DIR=/app/reports
       # Puppeteer / Chromium flags for containerized environment
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+      # Route ADB traffic to the Windows Host ADB Server
+      - ADB_SERVER_SOCKET=tcp:host.docker.internal:5037
     volumes:
       # Persist scan reports between restarts
       - reports-data:/app/reports
