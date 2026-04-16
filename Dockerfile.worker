@@ -43,8 +43,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install androwarn in a virtual environment (best practice for Debian/Ubuntu)
 RUN python3 -m venv /opt/androwarn-venv && \
-    /opt/androwarn-venv/bin/pip install --no-cache-dir androwarn && \
-    ln -s /opt/androwarn-venv/bin/androwarn /usr/local/bin/androwarn
+    /opt/androwarn-venv/bin/pip install --no-cache-dir androwarn frida-tools && \
+    ln -s /opt/androwarn-venv/bin/androwarn /usr/local/bin/androwarn && \
+    ln -s /opt/androwarn-venv/bin/frida-ps /usr/local/bin/frida-ps && \
+    ln -s /opt/androwarn-venv/bin/frida /usr/local/bin/frida
 
 # Set Puppeteer to use installed Chromium (skip download)
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
