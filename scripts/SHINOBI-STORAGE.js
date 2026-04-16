@@ -1,6 +1,6 @@
 // ================================================================
 // SHINOBI-STORAGE.js — Data Storage Monitor
-// ShinobiDroid 忍ドロイド — MASVS-STORAGE (M2)
+// Shinodroid 忍ドロイド — MASVS-STORAGE (M2)
 //
 // Monitors all data storage operations: SharedPreferences,
 // SQLite databases, file I/O, clipboard, and external storage.

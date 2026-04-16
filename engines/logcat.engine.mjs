@@ -1,5 +1,5 @@
 /**
- * ShinobiDroid — Logcat Leak Detection Engine
+ * Shinodroid — Logcat Leak Detection Engine
  *
  * Captures all logcat output from the app during dynamic analysis
  * and scans for sensitive data leaked to system logs.

@@ -1,5 +1,5 @@
 /**
- * ShinobiDroid — Frida Dynamic Analysis Engine
+ * Shinodroid — Frida Dynamic Analysis Engine
  *
  * Wraps the existing dynamic-analyzer.mjs in the standard engine interface.
  * Runs 9 MASVS-aligned Frida scripts + monkey exerciser + hook detection.

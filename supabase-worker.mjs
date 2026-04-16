@@ -1,22 +1,33 @@
 import { readFile, stat, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createClient } from "@supabase/supabase-js";
 import { config } from "dotenv";
 import { runAllEngines } from "./orchestrator.mjs";
 
-config();
+// Load .env from web/ for CONVEX_URL, or root .env
+config({ path: join(import.meta.dirname, "web", ".env.local") });
+config(); // Also load root .env if any
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+// ── Convex Client Setup ──────────────────────────────────────────────────────
+// We use dynamic import since convex is installed in the web/ directory
+const { ConvexHttpClient } = await import("convex/browser");
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    console.error("❌ Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env");
-    console.error("Please add SUPABASE_SERVICE_ROLE_KEY to your .env file to run the worker.");
+const CONVEX_URL = process.env.NEXT_PUBLIC_CONVEX_URL || process.env.CONVEX_URL;
+const CONVEX_DEPLOY_KEY = process.env.CONVEX_DEPLOY_KEY;
+
+if (!CONVEX_URL) {
+    console.error("❌ Missing NEXT_PUBLIC_CONVEX_URL or CONVEX_URL in .env");
+    console.error("Please add NEXT_PUBLIC_CONVEX_URL to web/.env.local to run the worker.");
     process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const convex = new ConvexHttpClient(CONVEX_URL);
+
+// If we have a deploy key, set it for admin access to internal functions
+// Otherwise the worker uses the HTTP actions approach
+if (CONVEX_DEPLOY_KEY) {
+    convex.setAdminAuth(CONVEX_DEPLOY_KEY);
+}
 
 function log(level, msg) {
     const ts = new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -41,80 +52,109 @@ const MAX_APK_SIZE = 100 * 1024 * 1024; // 100MB — must match client-side limi
 
 /**
  * Sanitize error messages before storing in database.
- * Strips file paths, stack traces, and internal details.
+ * Strictly prevents stack traces or paths from leaking to the client UI.
  */
 function sanitizeErrorMessage(msg) {
     if (!msg) return "An internal error occurred";
-    let sanitized = String(msg);
-    // Strip Windows/Unix file paths
-    sanitized = sanitized.replace(/[A-Z]:\\[^\s]+/gi, "[path]");
-    sanitized = sanitized.replace(/\/[\w./]+/g, (match) => {
-        // Keep URL-like paths, strip filesystem paths
-        if (match.includes("://") || match.startsWith("/api/") || match.startsWith("/v1/")) return match;
-        return "[path]";
-    });
-    // Strip stack traces (lines starting with "    at ")
-    sanitized = sanitized.replace(/\s+at\s+.+/g, "");
-    // Truncate to reasonable length
-    return sanitized.slice(0, 500);
+    let text = String(msg);
+    // If it's a known whitelist error, let it through
+    if (text.includes("Download failed") || text.includes("File size exceeds")) {
+        return text.slice(0, 150);
+    }
+    // Otherwise return a generic error and scrub details
+    return "Analysis engine encountered a specialized error processing this APK format.";
 }
 
 /**
- * Test if Supabase is reachable.
- * Returns true if connectivity is OK, false otherwise.
+ * Test if Convex is reachable.
  */
 async function ensureConnectivity() {
     try {
         const start = Date.now();
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/scans?select=id&limit=1`, {
-            headers: {
-                "apikey": SUPABASE_SERVICE_ROLE_KEY,
-                "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-            },
-            signal: AbortSignal.timeout(6000),
-        });
+        // Import internal API reference
+        const { internal } = await import("./web/convex/_generated/api.js");
+        const pendingScans = await convex.query(internal.scans.listPending, {});
         const ms = Date.now() - start;
-        if (res.ok) {
-            log("ok", `Supabase connected successfully (${ms}ms)`);
-            return true;
-        }
-        log("warn", `Supabase responded with status ${res.status}`);
-        return false;
+        log("ok", `Convex connected successfully (${ms}ms)`);
+        return true;
     } catch (e) {
-        log("warn", `Supabase unreachable: ${e.message}`);
+        log("warn", `Convex unreachable: ${e.message}`);
         return false;
     }
 }
 
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-async function insertFindings(findingsToInsert) {
+async function insertFindings(findingsToInsert, scanId) {
     if (findingsToInsert.length === 0) return;
-    const chunkSize = 100;
+    const { internal } = await import("./web/convex/_generated/api.js");
+
+    // DOS PROTECTION: Cap the number of findings to prevent Convex DB exhaustion
+    const MAX_FINDINGS = 2000;
+    if (findingsToInsert.length > MAX_FINDINGS) {
+        log("warn", `Scan ${scanId} generated ${findingsToInsert.length} findings. Truncating to ${MAX_FINDINGS}.`);
+        findingsToInsert = findingsToInsert.slice(0, MAX_FINDINGS);
+        findingsToInsert.push({
+            title: "Maximum Findings Reached",
+            severity: "info",
+            severityOrder: 5,
+            category: "System",
+            description: `This scan generated more than ${MAX_FINDINGS} findings. To prevent performance degradation, further findings have been truncated.`
+        });
+    }
+
+    // Convex mutations have a size limit, so we batch in chunks of 50
+    const chunkSize = 50;
     for (let i = 0; i < findingsToInsert.length; i += chunkSize) {
         const chunk = findingsToInsert.slice(i, i + chunkSize);
-        const { error: insertErr } = await supabase.from("findings").insert(chunk);
-        if (insertErr) log("warn", `Failed to insert findings chunk: ${insertErr.message}`);
+
+        // Map findings to Convex schema format (camelCase)
+        const convexFindings = chunk.map(f => ({
+            scanId,
+            title: f.title || "Untitled",
+            severity: f.severity || "info",
+            severityOrder: f.severity_order || 0,
+            category: f.category || f.engine || "general",
+            description: f.description || undefined,
+            recommendation: f.recommendation || undefined,
+            cvssScore: f.cvss_score || undefined,
+            owaspCategory: f.owasp_category || undefined,
+        }));
+
+        try {
+            await convex.mutation(internal.findings.batchInsert, { findings: convexFindings });
+        } catch (err) {
+            log("warn", `Failed to insert findings chunk: ${err.message}`);
+        }
     }
     log("ok", `Inserted ${findingsToInsert.length} findings`);
 }
 
-async function uploadToStorage(localPath, storagePath, contentType) {
+async function uploadToStorage(localPath, contentType) {
     try {
         await stat(localPath);
         const buffer = await readFile(localPath);
-        const { error: uploadErr } = await supabase.storage
-            .from("apks")
-            .upload(storagePath, buffer, { contentType, upsert: true });
-        if (uploadErr) {
-            log("warn", `Storage upload failed (${storagePath}): ${uploadErr.message}`);
-            return null;
+        const { internal } = await import("./web/convex/_generated/api.js");
+
+        // 1. Get upload URL from Convex
+        const uploadUrl = await convex.mutation(internal.storage.generateUploadUrlInternal, {});
+
+        // 2. Upload file to Convex storage
+        const response = await fetch(uploadUrl, {
+            method: "POST",
+            headers: { "Content-Type": contentType },
+            body: buffer,
+        });
+
+        if (!response.ok) {
+            throw new Error(`Upload failed: ${response.statusText}`);
         }
-        log("ok", `Uploaded → ${storagePath}`);
-        return storagePath;
+
+        const { storageId } = await response.json();
+        log("ok", `Uploaded → ${storageId}`);
+        return storageId;
     } catch (e) {
-        log("warn", `File not found for upload (${localPath}): ${e.message}`);
+        log("warn", `File not found or upload failed (${localPath}): ${e.message}`);
         return null;
     }
 }
@@ -123,54 +163,67 @@ async function uploadToStorage(localPath, storagePath, contentType) {
 
 async function processScan(scan) {
     const jobStart = Date.now();
+    const { internal } = await import("./web/convex/_generated/api.js");
+
     console.log();
     log("info", `╔══════════════════════════════════════════════════════════╗`);
-    log("info", `║  NEW JOB: ${scan.file_name.padEnd(45)}║`);
-    log("info", `║  Scan ID: ${scan.id}   ║`);
-    log("info", `║  Size: ${formatBytes(scan.file_size || 0).padEnd(48)}║`);
+    log("info", `║  NEW JOB: ${scan.fileName.padEnd(45)}║`);
+    log("info", `║  Scan ID: ${scan._id.padEnd(45)}║`);
+    log("info", `║  Size: ${formatBytes(scan.fileSize || 0).padEnd(48)}║`);
     log("info", `╚══════════════════════════════════════════════════════════╝`);
 
     try {
-        // ── Step 0: Server-side file size validation (H3) ────────────────
-        if (scan.file_size && scan.file_size > MAX_APK_SIZE) {
-            throw new Error(`APK exceeds maximum size of ${formatBytes(MAX_APK_SIZE)} (got ${formatBytes(scan.file_size)})`);
+        // ── Step 0: Server-side file size validation ────────────────────
+        if (scan.fileSize && scan.fileSize > MAX_APK_SIZE) {
+            throw new Error(`APK exceeds maximum size of ${formatBytes(MAX_APK_SIZE)} (got ${formatBytes(scan.fileSize)})`);
         }
-        // ── Step 1: Update status ────────────────────────────────────────────
+
+        // ── Step 1: Update status ────────────────────────────────────────
         log("step", "[1/6] Updating scan status → scanning...");
-        await supabase.from("scans")
-            .update({ status: "scanning", dynamic_status: "pending" })
-            .eq("id", scan.id);
+        await convex.mutation(internal.scans.updateStatus, {
+            id: scan._id,
+            status: "scanning",
+        });
         log("ok", "Scan status updated");
 
-        // ── Step 2: Download APK ─────────────────────────────────────────────
-        log("step", `[2/6] Downloading APK from storage: ${scan.file_path}`);
+        // ── Step 2: Download APK ─────────────────────────────────────────
+        log("step", `[2/6] Downloading APK from Convex storage...`);
         const dlStart = Date.now();
-        const { data: fileBlob, error: downloadErr } = await supabase
-            .storage.from("apks").download(scan.file_path);
-        if (downloadErr) throw new Error(`Download failed: ${downloadErr.message}`);
 
-        const fileBuffer = Buffer.from(await fileBlob.arrayBuffer());
+        let fileBuffer;
+        if (scan.storageId) {
+            const downloadUrl = await convex.query(internal.scans.getFileUrl, { storageId: scan.storageId });
+            if (!downloadUrl) throw new Error("Could not get download URL for APK");
+
+            const response = await fetch(downloadUrl);
+            if (!response.ok) throw new Error(`Download failed: ${response.statusText}`);
+
+            fileBuffer = Buffer.from(await response.arrayBuffer());
+        } else {
+            throw new Error("No storageId found for this scan");
+        }
+
         log("ok", `Downloaded ${formatBytes(fileBuffer.length)} in ${elapsed(dlStart)}`);
 
-        // ── Step 3: Write APK to temp ────────────────────────────────────────
-        const tempApkPath = join(tmpdir(), `shinobidroid-${scan.id}.apk`);
+        // ── Step 3: Write APK to temp ────────────────────────────────────
+        const tempApkPath = join(tmpdir(), `Shinodroid-${scan._id}.apk`);
         await writeFile(tempApkPath, fileBuffer);
         log("step", `[3/6] APK written to: ${tempApkPath}`);
 
         try {
-            // ── Step 4: Run ALL engines ──────────────────────────────────────
+            // ── Step 4: Run ALL engines ──────────────────────────────────
             log("step", "[4/6] Launching engine orchestrator...");
 
             const { mkdirSync } = await import("node:fs");
             const reportsDir = process.env.REPORTS_OUTPUT_DIR || "C:\\MobSF-Scans\\reports";
-            const outDir = join(reportsDir, scan.id);
+            const outDir = join(reportsDir, scan._id);
             try { mkdirSync(outDir, { recursive: true }); } catch { /* exists */ }
             log("info", `Reports directory: ${outDir}`);
 
             const engineContext = {
-                scanId: scan.id,
+                scanId: scan._id,
                 outDir,
-                fileName: scan.file_name,
+                fileName: scan.fileName,
                 mobsfReport: null,
                 packageName: null,
                 allFindings: [],
@@ -183,21 +236,21 @@ async function processScan(scan) {
             const result = await runAllEngines(tempApkPath, engineContext);
             log("ok", `All engines finished in ${elapsed(engineStart)}`);
 
-            // ── Step 5: Save findings ────────────────────────────────────────
-            log("step", `[5/6] Saving ${result.findings.length} findings to Supabase...`);
+            // ── Step 5: Save findings ────────────────────────────────────
+            log("step", `[5/6] Saving ${result.findings.length} findings to Convex...`);
             if (result.findings.length > 0) {
-                await insertFindings(result.findings);
+                await insertFindings(result.findings, scan._id);
             } else {
                 log("warn", "No findings to insert");
             }
 
-            // ── Build severity counts ────────────────────────────────────────
+            // ── Build severity counts ────────────────────────────────────
             const counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
             for (const f of result.findings) {
                 if (counts[f.severity] !== undefined) counts[f.severity]++;
             }
 
-            // ── Per-engine breakdown ─────────────────────────────────────────
+            // ── Per-engine breakdown ─────────────────────────────────────
             const engineBreakdown = {};
             for (const f of result.findings) {
                 engineBreakdown[f.engine] = (engineBreakdown[f.engine] || 0) + 1;
@@ -206,14 +259,14 @@ async function processScan(scan) {
                 log("info", `  📊 ${eng}: ${count} findings`);
             }
 
-            // ── Extract engine-specific data ─────────────────────────────────
+            // ── Extract engine-specific data ─────────────────────────────
             const mobsfEngine = result.engines.find(e => e.engine === "mobsf");
             const fridaEngine = result.engines.find(e => e.engine === "frida");
 
             const reportJson = mobsfEngine?.success ? {
                 security_score: mobsfEngine.metadata?.securityScore || 0,
                 average_cvss: mobsfEngine.metadata?.averageCvss || 0,
-                app_name: mobsfEngine.metadata?.appName || scan.file_name,
+                app_name: mobsfEngine.metadata?.appName || scan.fileName,
                 package_name: mobsfEngine.metadata?.packageName || "Unknown",
                 version_name: mobsfEngine.metadata?.versionName || "Unknown",
                 mobsf_hash: mobsfEngine.metadata?.hash || null,
@@ -223,94 +276,60 @@ async function processScan(scan) {
                 log("ok", `MobSF: app=${reportJson.app_name}, pkg=${reportJson.package_name}, score=${reportJson.security_score}`);
             }
 
-            // ── Upload reports ────────────────────────────────────────────────
-            log("step", "[6/6] Uploading reports to storage...");
+            // ── Upload reports to Convex Storage ─────────────────────────
+            log("step", "[6/6] Uploading reports to Convex storage...");
 
-            let pdfStoragePath = null;
+            let reportStorageId = null;
             if (mobsfEngine?.metadata?.outDir) {
                 try {
-                    pdfStoragePath = await uploadToStorage(
+                    reportStorageId = await uploadToStorage(
                         join(mobsfEngine.metadata.outDir, "report.pdf"),
-                        `${scan.user_id}/reports/${scan.id}.pdf`,
                         "application/pdf"
                     );
-                    if (pdfStoragePath) log("ok", `Static PDF uploaded`);
+                    if (reportStorageId) log("ok", "Static PDF uploaded");
                 } catch { log("warn", "Static PDF not found, skipping"); }
             }
 
-            let dynamicPdfPath = null;
+            let dynamicReportStorageId = null;
             if (fridaEngine?.success && fridaEngine.metadata?.fridaResults) {
-                try {
-                    await uploadToStorage(
-                        join(outDir, "frida-results.json"),
-                        `${scan.user_id}/reports/${scan.id}-frida.json`,
-                        "application/json"
-                    );
-                    log("ok", "Frida results JSON uploaded");
-                } catch { log("warn", "Frida JSON upload failed"); }
-
                 if (fridaEngine.metadata.dynamicPdfPath) {
                     try {
-                        dynamicPdfPath = await uploadToStorage(
+                        dynamicReportStorageId = await uploadToStorage(
                             fridaEngine.metadata.dynamicPdfPath,
-                            `${scan.user_id}/reports/${scan.id}-dynamic.pdf`,
                             "application/pdf"
                         );
-                        if (dynamicPdfPath) log("ok", "Dynamic PDF uploaded");
+                        if (dynamicReportStorageId) log("ok", "Dynamic PDF uploaded");
                     } catch { log("warn", "Dynamic PDF upload failed"); }
                 }
             }
 
-            // ── Determine dynamic status ─────────────────────────────────────
-            let dynamicStatus = "completed";
-            let dynamicReportJson = {};
-
-            if (fridaEngine?.skipped) {
-                dynamicStatus = "skipped";
-                dynamicReportJson = { skipped: true, reason: fridaEngine.error };
-                log("warn", `Frida: skipped — ${fridaEngine.error}`);
-            } else if (fridaEngine && !fridaEngine.success) {
-                dynamicStatus = "failed";
-                dynamicReportJson = { error: fridaEngine.error };
-                log("error", `Frida: failed — ${fridaEngine.error}`);
-            } else if (fridaEngine?.success) {
-                dynamicReportJson = {
-                    ...fridaEngine.metadata.fridaResults,
-                    pdfPath: dynamicPdfPath,
-                };
-                log("ok", "Frida: completed successfully");
-            } else {
-                dynamicStatus = "not_available";
-                dynamicReportJson = { note: "Frida engine not installed" };
-                log("warn", "Frida: not available");
-            }
-
-            // ── Update scan record ───────────────────────────────────────────
-            log("info", "Updating scan record in Supabase...");
-            await supabase.from("scans").update({
+            // ── Update scan record ───────────────────────────────────────
+            log("info", "Updating scan record in Convex...");
+            const updateArgs = {
+                id: scan._id,
                 status: "completed",
-                completed_at: new Date().toISOString(),
-                findings_critical: counts.critical,
-                findings_high: counts.high,
-                findings_medium: counts.medium,
-                findings_low: counts.low,
-                findings_info: counts.info,
-                report_json: reportJson,
-                report_url: pdfStoragePath,
-                dynamic_status: dynamicStatus,
-                dynamic_report_json: dynamicReportJson,
-                dynamic_completed_at: new Date().toISOString(),
-            }).eq("id", scan.id);
+                completedAt: Date.now(),
+                findingsCritical: counts.critical,
+                findingsHigh: counts.high,
+                findingsMedium: counts.medium,
+                findingsLow: counts.low,
+                findingsInfo: counts.info,
+                reportJson,
+            };
 
-            // ── Final summary ────────────────────────────────────────────────
+            if (reportStorageId) updateArgs.reportStorageId = reportStorageId;
+            if (dynamicReportStorageId) updateArgs.dynamicReportStorageId = dynamicReportStorageId;
+
+            await convex.mutation(internal.scans.updateStatus, updateArgs);
+
+            // ── Final summary ────────────────────────────────────────────
             console.log();
             log("ok", `╔══════════════════════════════════════════════════════════╗`);
-            log("ok", `║  JOB COMPLETE: ${scan.file_name.padEnd(40)}║`);
+            log("ok", `║  JOB COMPLETE: ${scan.fileName.padEnd(40)}║`);
             log("ok", `╠══════════════════════════════════════════════════════════╣`);
             log("ok", `║  Engines:  ${String(result.summary.enginesRun).padStart(2)} ran │ ${String(result.summary.enginesSkipped).padStart(2)} skipped │ ${String(result.summary.enginesFailed).padStart(2)} failed      ║`);
             log("ok", `║  Findings: ${String(counts.critical).padStart(2)}C ${String(counts.high).padStart(2)}H ${String(counts.medium).padStart(2)}M ${String(counts.low).padStart(2)}L ${String(counts.info).padStart(2)}I  (${result.summary.totalFindings} total)${" ".repeat(Math.max(0, 14 - String(result.summary.totalFindings).length))}║`);
             log("ok", `║  Duration: ${elapsed(jobStart).padEnd(45)}║`);
-            log("ok", `║  Dynamic:  ${dynamicStatus.padEnd(45)}║`);
             log("ok", `╚══════════════════════════════════════════════════════════╝`);
             console.log();
 
@@ -321,12 +340,13 @@ async function processScan(scan) {
 
     } catch (err) {
         log("error", `Job failed: ${err.message}`);
-        await supabase.from("scans").update({
+        const { internal } = await import("./web/convex/_generated/api.js");
+        await convex.mutation(internal.scans.updateStatus, {
+            id: scan._id,
             status: "failed",
-            error_message: sanitizeErrorMessage(err.message),
-            completed_at: new Date().toISOString(),
-            dynamic_status: "failed",
-        }).eq("id", scan.id);
+            errorMessage: sanitizeErrorMessage(err.message),
+            completedAt: Date.now(),
+        });
     }
 }
 
@@ -336,12 +356,6 @@ let isPolling = false;
 let pollCount = 0;
 let consecutiveFailures = 0;
 
-// Realtime reconnect throttle
-let realtimeErrors = 0;
-let lastRealtimeReconnect = 0;
-const MAX_REALTIME_ERRORS = 10;          // after this, polling-only mode
-const REALTIME_RECONNECT_COOLDOWN_MS = 60_000; // min 60s between reconnects
-
 async function pollPendingScans() {
     if (isPolling) return;
     isPolling = true;
@@ -349,65 +363,52 @@ async function pollPendingScans() {
 
     try {
         const pollStart = Date.now();
-        const { data: pendingScans, error } = await supabase
-            .from("scans")
-            .select("*")
-            .eq("status", "pending")
-            .order("created_at", { ascending: true })
-            .limit(1);
-
+        const { internal } = await import("./web/convex/_generated/api.js");
+        const pendingScans = await convex.query(internal.scans.listPending, {});
         const pollMs = Date.now() - pollStart;
 
-        if (error) {
-            log("error", `Poll #${pollCount}: Supabase query failed (${pollMs}ms) — ${error.message}`);
-            consecutiveFailures++;
-            // After 2 consecutive failures, try auto-fixing with WARP
-            if (consecutiveFailures >= 2) {
-                log("warn", `${consecutiveFailures} consecutive poll failures — attempting WARP auto-fix...`);
-                consecutiveFailures = 0;
-                await ensureConnectivity();
-            }
-            return;
-        }
-
-        consecutiveFailures = 0; // Reset on success
+        consecutiveFailures = 0;
 
         if (pendingScans && pendingScans.length > 0) {
             log("info", `Poll #${pollCount}: 🔔 Found pending scan! (${pollMs}ms)`);
-            log("info", `  File: ${pendingScans[0].file_name}`);
-            log("info", `  ID:   ${pendingScans[0].id}`);
+            log("info", `  File: ${pendingScans[0].fileName}`);
+            log("info", `  ID:   ${pendingScans[0]._id}`);
             await processScan(pendingScans[0]);
             isPolling = false;
             setImmediate(pollPendingScans);
             return;
         } else {
-            // Heartbeat — only log every 4th poll to avoid spam, but always log the first one
             if (pollCount === 1 || pollCount % 4 === 0) {
                 log("info", `Poll #${pollCount}: No pending scans (${pollMs}ms) — waiting...`);
             }
         }
     } catch (err) {
         log("error", `Poll #${pollCount}: Exception — ${err.message}`);
+        consecutiveFailures++;
+        if (consecutiveFailures >= 3) {
+            log("warn", `${consecutiveFailures} consecutive poll failures — will retry...`);
+            consecutiveFailures = 0;
+        }
     } finally {
         isPolling = false;
     }
 }
 
-// ── Realtime Listener ─────────────────────────────────────────────────────────
+// ── Worker Startup ────────────────────────────────────────────────────────────
 
 async function startWorker() {
     console.log();
     console.log("  ╔═══════════════════════════════════════════════════╗");
-    console.log("  ║   🥷 ShinobiDroid — Scan Worker                   ║");
+    console.log("  ║   🥷 Shinodroid — Scan Worker (Convex)          ║");
     console.log("  ╠═══════════════════════════════════════════════════╣");
-    const maskedUrl = SUPABASE_URL.replace(/https:\/\/([^.]+)/, "https://$1").replace(/([a-z0-9]{8})[a-z0-9]+/, "$1****");
-    console.log(`  ║   Supabase: ${maskedUrl.replace("https://", "").substring(0, 36).padEnd(36)}║`);
-    console.log(`  ║   Time:     ${new Date().toLocaleString().padEnd(36)}║`);
+    const maskedUrl = CONVEX_URL.replace(/https:\/\/([^.]+)/, "https://$1").replace(/([a-z0-9]{8})[a-z0-9]+/, "$1****");
+    console.log(`  ║   Convex:  ${maskedUrl.substring(0, 36).padEnd(36)}║`);
+    console.log(`  ║   Time:    ${new Date().toLocaleString().padEnd(36)}║`);
     console.log("  ╚═══════════════════════════════════════════════════╝");
     console.log();
 
-    // ── Connectivity check (auto-connects WARP if needed) ───────────
-    log("info", "Testing Supabase connectivity...");
+    // ── Connectivity check ──────────────────────────────────────────
+    log("info", "Testing Convex connectivity...");
     const connected = await ensureConnectivity();
     if (!connected) {
         log("warn", "Starting in degraded mode — will retry connectivity on each poll");
@@ -427,123 +428,11 @@ async function startWorker() {
     log("info", "Starting poll loop...");
     pollPendingScans();
 
-    // Fallback poll every 30s
+    // Poll every 30s (Convex queries are fast, no realtime channel needed here
+    // since the worker is a background process, not a browser client)
     setInterval(pollPendingScans, 30_000);
     log("ok", "Worker ready. Upload an APK from the dashboard to start analysis.");
     console.log();
-
-    // Start realtime subscription (throttled reconnect on error)
-    subscribeRealtime();
-
-    // ── APK Auto-Cleanup (M3: enforce "deleted after 24 hours" claim) ────
-    cleanupOldApks(); // Run once at startup
-    setInterval(cleanupOldApks, 60 * 60_000); // Then every hour
-    log("ok", "🗑️  APK auto-cleanup scheduled (hourly, deletes APKs > 24h old)");
-}
-
-// ── APK Auto-Deletion ─────────────────────────────────────────────────────────
-const APK_RETENTION_HOURS = 24;
-
-async function cleanupOldApks() {
-    try {
-        const cutoff = new Date(Date.now() - APK_RETENTION_HOURS * 60 * 60_000).toISOString();
-
-        // Find completed/failed scans older than 24h that still have a file_path
-        const { data: oldScans, error: queryErr } = await supabase
-            .from("scans")
-            .select("id, file_path, user_id")
-            .in("status", ["completed", "failed"])
-            .lt("completed_at", cutoff)
-            .not("file_path", "is", null);
-
-        if (queryErr) {
-            log("warn", `APK cleanup query failed: ${queryErr.message}`);
-            return;
-        }
-
-        if (!oldScans || oldScans.length === 0) return;
-
-        log("info", `🗑️  APK cleanup: ${oldScans.length} scan(s) older than ${APK_RETENTION_HOURS}h found`);
-
-        let deleted = 0;
-        for (const scan of oldScans) {
-            try {
-                // Delete APK from storage
-                if (scan.file_path) {
-                    const { error: delErr } = await supabase.storage
-                        .from("apks")
-                        .remove([scan.file_path]);
-
-                    if (delErr) {
-                        log("warn", `  Failed to delete APK ${scan.id}: ${delErr.message}`);
-                        continue;
-                    }
-                }
-
-                // Nullify file_path in DB so we don't try again
-                await supabase.from("scans")
-                    .update({ file_path: null })
-                    .eq("id", scan.id);
-
-                deleted++;
-            } catch (err) {
-                log("warn", `  APK cleanup error for ${scan.id}: ${err.message}`);
-            }
-        }
-
-        if (deleted > 0) {
-            log("ok", `🗑️  APK cleanup: ${deleted} APK(s) deleted from storage`);
-        }
-    } catch (err) {
-        log("warn", `APK cleanup failed: ${err.message}`);
-    }
-}
-
-function subscribeRealtime() {
-    supabase
-        .channel("public:scans")
-        .on("postgres_changes",
-            { event: "INSERT", schema: "public", table: "scans", filter: "status=eq.pending" },
-            (payload) => {
-                log("info", `🔔 Realtime: New scan detected — ${payload.new.file_name}`);
-                pollPendingScans();
-            }
-        )
-        .subscribe((status) => {
-            if (status === "SUBSCRIBED") {
-                log("ok", "✅ Realtime channel subscribed — listening for new uploads");
-                realtimeErrors = 0;
-            } else if (status === "CHANNEL_ERROR") {
-                realtimeErrors++;
-                const now = Date.now();
-                const secsSinceLastReconnect = ((now - lastRealtimeReconnect) / 1000).toFixed(0);
-
-                if (realtimeErrors > MAX_REALTIME_ERRORS) {
-                    log("warn", `Realtime: too many errors (${realtimeErrors}) — polling only mode`);
-                    return;
-                }
-
-                if (now - lastRealtimeReconnect < REALTIME_RECONNECT_COOLDOWN_MS) {
-                    log("warn", `Realtime error — reconnect cooldown active (${secsSinceLastReconnect}s ago), skipping`);
-                    return;
-                }
-
-                log("warn", `Realtime error #${realtimeErrors} — reconnecting in 5s...`);
-                lastRealtimeReconnect = now;
-
-                setTimeout(async () => {
-                    const warpOk = await ensureConnectivity().catch(() => false);
-                    if (!warpOk) {
-                        log("warn", "Realtime: WARP/Supabase unreachable, skipping reconnect");
-                        return;
-                    }
-                    log("info", "Realtime: reconnecting channel...");
-                    subscribeRealtime();
-                }, 5000);
-            } else {
-                log("info", `Realtime channel status: ${status}`);
-            }
-        });
 }
 
 export { startWorker, processScan };

@@ -1,6 +1,6 @@
 // ================================================================
 // SHINOBI-RESILIENCE.js — Anti-Tamper & Reverse Engineering Bypass
-// ShinobiDroid 忍ドロイド — MASVS-RESILIENCE (M7/M9)
+// Shinodroid 忍ドロイド — MASVS-RESILIENCE (M7/M9)
 //
 // Bypasses and monitors: debugger detection, Frida detection,
 // emulator detection, integrity checks, SafetyNet/Play Integrity,

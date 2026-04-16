@@ -1,6 +1,6 @@
 // ================================================================
 // SHINOBI-PLATFORM.js — Platform Interaction Monitor
-// ShinobiDroid 忍ドロイド — MASVS-PLATFORM (M1)
+// Shinodroid 忍ドロイド — MASVS-PLATFORM (M1)
 //
 // Monitors Android IPC mechanisms: Intents, BroadcastReceivers,
 // ContentProviders, PendingIntents, and deep link handling.

@@ -1,5 +1,5 @@
 # ================================================================
-# WORMHOLE // ShinobiDroid - Emulator Setup Script
+# WORMHOLE // Shinodroid - Emulator Setup Script
 # Automates: emulator launch, Frida server install, Frida start
 # ================================================================
 #
@@ -20,7 +20,7 @@ $ErrorActionPreference = "Continue"
 
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host "  WORMHOLE // ShinobiDroid - Automated Lab Setup" -ForegroundColor Cyan
+Write-Host "  WORMHOLE // Shinodroid - Automated Lab Setup" -ForegroundColor Cyan
 Write-Host "========================================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -83,7 +83,7 @@ if ($connected) {
     $selectedAvd = if ($avds -is [string]) { $avds } else { $avds[0] }
     Write-Host "  [--] Launching: $selectedAvd" -ForegroundColor Cyan
 
-    Start-Process -FilePath "emulator" -ArgumentList "-avd", $selectedAvd -WindowStyle Normal
+    Start-Process -FilePath "emulator" -ArgumentList "-avd", $selectedAvd, "-wipe-data", "-no-audio", "-no-boot-anim" -WindowStyle Normal
 
     $timeout = 180
     $elapsed = 0

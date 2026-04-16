@@ -1,5 +1,5 @@
 /**
- * ShinobiDroid — Engine Test Harness
+ * Shinodroid — Engine Test Harness
  *
  * Tests each engine in isolation, then runs a full orchestrator integration test.
  * Validates: discovery, availability, execution, output schema, error handling.
@@ -498,7 +498,7 @@ async function testFullPipeline(apkPath) {
 
 async function main() {
     console.log("\n╔══════════════════════════════════════════════════════════╗");
-    console.log("║   ShinobiDroid — Engine Test Harness                    ║");
+    console.log("║   Shinodroid — Engine Test Harness                    ║");
     console.log("╚══════════════════════════════════════════════════════════╝");
     console.log(`  Time: ${new Date().toISOString()}`);
     if (onlyEngine) console.log(`  Filter: --engine=${onlyEngine}`);

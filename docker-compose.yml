@@ -1,18 +1,19 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# ShinobiDroid 忍ドロイド — Docker Compose (Production)
+# Shinodroid 忍ドロイド — Docker Compose (Production)
 #
 # Usage:
-#   docker compose up -d          # Start all services
-#   docker compose logs -f worker # Watch worker logs
-#   docker compose down           # Stop all services
+#   docker compose -f docker-compose.yml up -d   # Start all services
+#   docker compose logs -f worker                # Watch worker logs
+#   docker compose down                          # Stop all services
 #
 # Services:
 #   web    — Next.js dashboard        (http://localhost:3000)
 #   worker — Scan engine orchestrator  (background)
-#   mobsf  — MobSF static analysis    (http://localhost:8000)
+#   mobsf  — MobSF static analysis    (internal only)
+#   ollama — LLM inference engine     (internal only)
 #
 # Prerequisites:
-#   1. Copy .env.example to .env and fill in your Supabase keys
+#   1. Copy .env.example to .env and fill in your keys
 #   2. Docker Desktop running
 #   3. That's it.
 # ══════════════════════════════════════════════════════════════════════════════
@@ -24,9 +25,10 @@ services:
       context: ./web
       dockerfile: Dockerfile
       args:
+        NEXT_PUBLIC_CONVEX_URL: ${NEXT_PUBLIC_CONVEX_URL}
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
-    container_name: shinobidroid-web
+    container_name: Shinodroid-web
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -42,7 +44,7 @@ services:
       start_period: 15s
       retries: 3
     networks:
-      - shinobidroid
+      - Shinodroid
     # Security: drop all capabilities, no privilege escalation
     security_opt:
       - no-new-privileges:true
@@ -52,7 +54,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
-    container_name: shinobidroid-worker
+    container_name: Shinodroid-worker
     restart: unless-stopped
     env_file:
       - .env
@@ -60,14 +62,21 @@ services:
       - NODE_ENV=production
       # Point MobSF to the sidecar container (not localhost)
       - MOBSF_URL=http://mobsf:8000
+      # Point Ollama to the sidecar container (not localhost)
+      - OLLAMA_URL=http://ollama:11434
       - REPORTS_OUTPUT_DIR=/app/reports
       # Puppeteer / Chromium flags for containerized environment
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
     volumes:
       # Persist scan reports between restarts
       - reports-data:/app/reports
+      # Mount Convex config from web/ for the worker to read
+      - ./web/.env.local:/app/web/.env.local:ro
     depends_on:
-      - mobsf
+      mobsf:
+        condition: service_healthy
+      ollama:
+        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "process.exit(0)"]
       interval: 60s
@@ -75,7 +84,7 @@ services:
       start_period: 20s
       retries: 3
     networks:
-      - shinobidroid
+      - Shinodroid
     # Security: no privilege escalation
     security_opt:
       - no-new-privileges:true
@@ -92,11 +101,12 @@ services:
   # ── MobSF (Static Analysis) ──────────────────────────────────────────────
   mobsf:
     image: opensecurity/mobile-security-framework-mobsf:latest
-    container_name: shinobidroid-mobsf
+    container_name: Shinodroid-mobsf
     restart: unless-stopped
-    ports:
-      # Expose MobSF UI for debugging (optional — remove in production)
-      - "8000:8000"
+    # No external ports — accessed only by worker via internal network
+    # Uncomment below for debugging:
+    # ports:
+    #   - "8000:8000"
     environment:
       - MOBSF_API_ONLY=1
     volumes:
@@ -109,7 +119,7 @@ services:
       start_period: 45s
       retries: 5
     networks:
-      - shinobidroid
+      - Shinodroid
     security_opt:
       - no-new-privileges:true
     deploy:
@@ -121,13 +131,44 @@ services:
           memory: 1G
           cpus: "0.5"
 
+  # ── Ollama (AI Triage Engine) ─────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: Shinodroid-ollama
+    restart: unless-stopped
+    # No external ports — accessed only by worker via internal network
+    # Uncomment below for debugging:
+    # ports:
+    #   - "11434:11434"
+    volumes:
+      # Persist downloaded models between restarts
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    networks:
+      - Shinodroid
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+        reservations:
+          memory: 1G
+          cpus: "0.5"
+
 networks:
-  shinobidroid:
+  Shinodroid:
     driver: bridge
-    name: shinobidroid-net
+    name: Shinodroid-net
 
 volumes:
   reports-data:
-    name: shinobidroid-reports
+    name: Shinodroid-reports
   mobsf-data:
-    name: shinobidroid-mobsf
+    name: Shinodroid-mobsf
+  ollama-data:
+    name: Shinodroid-ollama

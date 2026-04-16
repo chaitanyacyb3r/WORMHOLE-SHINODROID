@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { ConvexClientProvider } from "./ConvexClientProvider";
 
 export const metadata: Metadata = {
-  title: "ShinobiDroid | WORMHOLE Security",
+  title: "Shinodroid | WORMHOLE Security",
   description:
     "Automated Android penetration testing platform. Upload APKs, get industry-grade security reports with static analysis, dynamic instrumentation, SSL pinning bypass, and root detection testing.",
   keywords: [
@@ -24,7 +25,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" suppressHydrationWarning>
       <head>
         <link
           href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap"
@@ -32,7 +33,7 @@ export default function RootLayout({
         />
       </head>
       <body className="bg-grid" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
-        {children}
+        <ConvexClientProvider>{children}</ConvexClientProvider>
       </body>
     </html>
   );

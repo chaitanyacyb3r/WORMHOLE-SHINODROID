@@ -1,5 +1,5 @@
 /**
- * ShinobiDroid 忍ドロイド — Dynamic Analyzer Module (Frida + ADB)
+ * Shinodroid 忍ドロイド — Dynamic Analyzer Module (Frida + ADB)
  *
  * Pipeline:
  *   1. Check for connected emulator (auto-launch if missing)
@@ -470,16 +470,22 @@ function runFridaScript(packageName, scriptPath, scriptName) {
  * and produces false negatives.
  *
  * Instead, we send controlled tap and swipe events at coordinates strictly
- * within the app's content area (y: 200–1700), avoiding the status bar
- * (top ~100px) and navigation bar (bottom ~100px).
+ * within the app's content area (y: 250–1650), avoiding the status bar
+ * (top ~150px) and navigation bar (bottom ~150px).
+ *
+ * IMPORTANT: We do NOT send KEYCODE_BACK events — they can push the root
+ * activity off-screen and background the app, causing Frida hooks to stop
+ * receiving data. A foreground watchdog checks before each batch and
+ * re-launches the app if it has been backgrounded.
  */
 async function exerciseApp(packageName) {
     try {
         log("info", `Exercising ${packageName} with safe targeted inputs...`);
 
-        // Safe content area boundaries (works for 1080x1920 and 1080x2400)
-        const minX = 50, maxX = 1030;
-        const minY = 200, maxY = 1700; // well below status bar, above nav bar
+        // Safe content area boundaries (conservative margins to avoid
+        // status bar, navigation bar, and edge gestures)
+        const minX = 80, maxX = 1000;
+        const minY = 250, maxY = 1650;
 
         const randInt = (lo, hi) => Math.floor(Math.random() * (hi - lo + 1)) + lo;
 
@@ -494,17 +500,15 @@ async function exerciseApp(packageName) {
         for (let i = 0; i < 8; i++) {
             const x = randInt(200, 800);
             const y1 = randInt(400, 900);
-            const y2 = randInt(1000, 1500);
+            const y2 = randInt(1000, 1400);
             // Alternate scroll direction
             actions.push(i % 2 === 0
                 ? `input swipe ${x} ${y1} ${x} ${y2} 300`   // scroll up
                 : `input swipe ${x} ${y2} ${x} ${y1} 300`); // scroll down
         }
 
-        // Add 4 Back presses to navigate between screens
-        for (let i = 0; i < 4; i++) {
-            actions.push("input keyevent KEYCODE_BACK");
-        }
+        // NO KEYCODE_BACK — it backgrounds the app from the root activity.
+        // Instead, we only use taps and swipes within the app's content area.
 
         // Shuffle actions for more natural interaction
         for (let i = actions.length - 1; i > 0; i--) {
@@ -512,9 +516,15 @@ async function exerciseApp(packageName) {
             [actions[i], actions[j]] = [actions[j], actions[i]];
         }
 
-        // Execute in batches (chain with && and sleep between batches)
+        // Execute in batches with foreground watchdog
         const batchSize = 6;
         for (let i = 0; i < actions.length; i += batchSize) {
+            // ── Foreground watchdog ──────────────────────────────────────
+            // Before each batch, verify the app is still in the foreground.
+            // If it got backgrounded (by an accidental gesture, dialog, etc.),
+            // re-launch it immediately.
+            await ensureAppForeground(packageName);
+
             const batch = actions.slice(i, i + batchSize);
             const cmd = batch.join(" && sleep 0.15 && ");
             try {
@@ -527,6 +537,84 @@ async function exerciseApp(packageName) {
         log("ok", `App exercised — ${actions.length} safe input events sent`);
     } catch (err) {
         log("info", `Exerciser finished (${err.message?.substring(0, 60) || "done"})`);
+    }
+}
+
+/**
+ * Check if the target app is currently in the foreground.
+ * If not, re-launch it via `am start` with the LAUNCHER intent.
+ *
+ * Uses `dumpsys activity recents` to check the top task's
+ * base activity, which is more reliable than `dumpsys window`
+ * across different Android/emulator versions.
+ */
+async function ensureAppForeground(packageName) {
+    try {
+        // Method 1: Check the currently focused window
+        const { stdout: windowInfo } = await execFileAsync(ADB, adb(
+            "shell", "dumpsys", "window", "windows"
+        ), { timeout: 5_000 });
+
+        // Look for our package in the current focus line
+        if (windowInfo.includes(`mCurrentFocus`) || windowInfo.includes(`mFocusedApp`)) {
+            const focusLines = windowInfo.split("\n").filter(
+                l => l.includes("mCurrentFocus") || l.includes("mFocusedApp")
+            );
+            const isForeground = focusLines.some(l => l.includes(packageName));
+            if (isForeground) return; // App is in front, nothing to do
+        }
+
+        // Method 2 (fallback): Check the top activity via recents
+        try {
+            const { stdout: recents } = await execFileAsync(ADB, adb(
+                "shell", "dumpsys", "activity", "recents"
+            ), { timeout: 5_000 });
+            // The first "Recent #0" entry is the current foreground task
+            const topTask = recents.split("Recent #0")[1]?.split("Recent #1")[0] || "";
+            if (topTask.includes(packageName)) return; // Still on top
+        } catch { /* fallback failed, proceed to relaunch */ }
+
+        // App is NOT in the foreground — bring it back
+        log("warn", `⚡ ${packageName} left foreground — re-launching...`);
+
+        // Try the launcher intent first (most reliable way)
+        try {
+            await execFileAsync(ADB, adb(
+                "shell", "am", "start",
+                "-a", "android.intent.action.MAIN",
+                "-c", "android.intent.category.LAUNCHER",
+                "--activity-brought-to-front", "true",
+                packageName
+            ), { timeout: 8_000 });
+        } catch {
+            // Fallback: use monkey to launch the default activity
+            try {
+                await execFileAsync(ADB, adb(
+                    "shell", "monkey",
+                    "-p", packageName,
+                    "-c", "android.intent.category.LAUNCHER",
+                    "1"
+                ), { timeout: 8_000 });
+            } catch {
+                // Last resort: direct activity launch
+                try {
+                    await execFileAsync(ADB, adb(
+                        "shell", "am", "start",
+                        "-n", `${packageName}/.MainActivity`
+                    ), { timeout: 8_000 });
+                } catch (e) {
+                    log("warn", `Could not re-launch ${packageName}: ${e.message}`);
+                }
+            }
+        }
+
+        // Give the app a moment to come back to the foreground
+        await new Promise(r => setTimeout(r, 1500));
+        log("ok", `Re-launched ${packageName} into foreground`);
+
+    } catch (err) {
+        // Don't fail the exercise loop if the watchdog itself errors
+        log("warn", `Foreground check failed: ${err.message?.substring(0, 80)}`);
     }
 }
 

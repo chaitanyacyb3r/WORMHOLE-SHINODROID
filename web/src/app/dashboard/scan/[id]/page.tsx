@@ -1,25 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import {
     Shield, Clock, CheckCircle, AlertTriangle, Download, ArrowLeft,
     FileText, Activity, Zap, Terminal, WifiOff, ChevronDown, ChevronUp
 } from "lucide-react";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
-
-interface Finding {
-    id: string;
-    title: string;
-    severity: string;
-    description: string;
-    category: string;
-    recommendation: string;
-    owasp_category: string | null;
-    owasp_masvs: string | null;
-    engine: string;
-}
+import { useQuery } from "convex/react";
+import { api } from "../../../../../convex/_generated/api";
+import { Id } from "../../../../../convex/_generated/dataModel";
 
 // Engine display metadata — used for badge colors and labels
 const ENGINE_META: Record<string, { label: string; color: string; bg: string; icon: string }> = {
@@ -74,29 +64,9 @@ interface DynamicReport {
     };
 }
 
-interface ScanData {
-    id: string;
-    file_name: string;
-    status: string;
-    created_at: string;
-    completed_at: string | null;
-    file_size: number;
-    findings_critical: number;
-    findings_high: number;
-    findings_medium: number;
-    findings_low: number;
-    findings_info: number;
-    scan_type: string;
-    report_url: string | null;
-    dynamic_status: string | null;
-    dynamic_report_json: DynamicReport | null;
-    dynamic_completed_at: string | null;
-    report_json: { security_score?: number; app_name?: string; package_name?: string; mobsf_hash?: string } | null;
-}
-
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function DynamicStatusBadge({ status }: { status: string | null }) {
+function DynamicStatusBadge({ status }: { status: string | null | undefined }) {
     const cfg: Record<string, { color: string; bg: string; icon: React.ReactNode; label: string }> = {
         not_run: { color: "#6b7280", bg: "rgba(107,114,128,0.1)", icon: <WifiOff size={12} />, label: "Not Run" },
         pending: { color: "#60a5fa", bg: "rgba(59,130,246,0.1)", icon: <Clock size={12} />, label: "Pending" },
@@ -165,41 +135,56 @@ function FridaScriptCard({ script }: { script: FridaScript }) {
 
 export default function ScanDetailPage() {
     const params = useParams();
-    const [scan, setScan] = useState<ScanData | null>(null);
-    const [findings, setFindings] = useState<Finding[]>([]);
-    const [loading, setLoading] = useState(true);
+    const scanId = params.id as Id<"scans">;
     const [activeTab, setActiveTab] = useState<"overview" | "findings" | "dynamic">("overview");
     const [engineFilter, setEngineFilter] = useState<string | null>(null);
-    const supabase = createClient();
 
+    // Convex reactive queries — auto-update in realtime, no channels needed!
+    const scan = useQuery(api.scans.get, { id: scanId });
+    const findings = useQuery(api.findings.listByScan, { scanId }) ?? [];
+    const loading = scan === undefined;
+    const prevStatusRef = useRef<string | null>(null);
+
+    // ── Debug Logging: fires on every Convex data update ──────────────
     useEffect(() => {
-        async function load() {
-            const { data: scanData } = await supabase
-                .from("scans").select("*").eq("id", params.id).single();
-            if (scanData) {
-                setScan(scanData);
-                const { data: findingsData, error: findingsErr } = await supabase
-                    .from("findings").select("*").eq("scan_id", params.id)
-                    .order("severity_order", { ascending: false });
-                if (findingsErr) {
-                    console.error("Failed to fetch findings:", findingsErr.message);
-                } else if (findingsData) {
-                    setFindings(findingsData);
-                }
-            }
-            setLoading(false);
+        if (!scan) return;
+
+        const now = new Date().toISOString();
+        const statusChanged = prevStatusRef.current !== null && prevStatusRef.current !== scan.status;
+
+        if (statusChanged) {
+            console.log(`[SCAN] 🔄 STATUS CHANGED: "${prevStatusRef.current}" → "${scan.status}" at ${now}`);
         }
-        load();
+        prevStatusRef.current = scan.status;
 
-        const channel = supabase
-            .channel(`scan-${params.id}`)
-            .on("postgres_changes",
-                { event: "UPDATE", schema: "public", table: "scans", filter: `id=eq.${params.id}` },
-                (payload) => setScan(payload.new as ScanData))
-            .subscribe();
+        console.log(`[SCAN] 📊 Scan Update:`, {
+            scanId: scan._id,
+            fileName: scan.fileName,
+            status: scan.status,
+            fileSize: `${(scan.fileSize / 1024 / 1024).toFixed(1)} MB`,
+            findingsCritical: scan.findingsCritical || 0,
+            findingsHigh: scan.findingsHigh || 0,
+            findingsMedium: scan.findingsMedium || 0,
+            findingsLow: scan.findingsLow || 0,
+            findingsInfo: scan.findingsInfo || 0,
+            totalFindings: findings.length,
+            hasReportPdf: !!scan.reportStorageId,
+            hasDynamicReport: !!scan.dynamicReportStorageId,
+            hasReportJson: !!scan.reportJson,
+            timestamp: now,
+        });
 
-        return () => { supabase.removeChannel(channel); };
-    }, [params.id, supabase]);
+        if (scan.status === "pending") {
+            console.log("[SCAN] ⏳ Scan is PENDING — the worker process needs to be running to process this scan.");
+            console.log("[SCAN] 💡 Start the worker: cd OPENCLAW-SECURITY-INTEGRITY && node supabase-worker.mjs");
+        } else if (scan.status === "scanning") {
+            console.log("[SCAN] 🔍 Scan is RUNNING — worker is actively analyzing the APK...");
+        } else if (scan.status === "completed") {
+            console.log(`[SCAN] ✅ Scan COMPLETED — ${findings.length} findings found`);
+        } else if (scan.status === "failed") {
+            console.log("[SCAN] ❌ Scan FAILED — check worker terminal for error details");
+        }
+    }, [scan, findings.length, scanId]);
 
     if (loading) {
         return (
@@ -223,37 +208,31 @@ export default function ScanDetailPage() {
     }
 
     const isScanning = scan.status === "pending" || scan.status === "scanning";
-    const isDynamicRunning = scan.dynamic_status === "running" || scan.dynamic_status === "pending";
-    const dynamicDone = scan.dynamic_status === "completed" || scan.dynamic_status === "failed" || scan.dynamic_status === "skipped";
+    const dynReport = (scan.reportJson as DynamicReport | null) ?? null;
 
     const severityCounts = [
-        { label: "Critical", count: scan.findings_critical || 0, color: "#ef4444" },
-        { label: "High", count: scan.findings_high || 0, color: "#f97316" },
-        { label: "Medium", count: scan.findings_medium || 0, color: "#f59e0b" },
-        { label: "Low", count: scan.findings_low || 0, color: "#3b82f6" },
-        { label: "Info", count: scan.findings_info || 0, color: "#10b981" },
+        { label: "Critical", count: scan.findingsCritical || 0, color: "#ef4444" },
+        { label: "High", count: scan.findingsHigh || 0, color: "#f97316" },
+        { label: "Medium", count: scan.findingsMedium || 0, color: "#f59e0b" },
+        { label: "Low", count: scan.findingsLow || 0, color: "#3b82f6" },
+        { label: "Info", count: scan.findingsInfo || 0, color: "#10b981" },
     ];
     const totalFindings = severityCounts.reduce((a, s) => a + s.count, 0);
-    const dynReport = scan.dynamic_report_json;
 
-    // Group findings by engine for display
-    const engineGroups = findings.reduce<Record<string, Finding[]>>((acc, f) => {
-        const eng = f.engine || "mobsf";
-        if (!acc[eng]) acc[eng] = [];
-        acc[eng].push(f);
+    // Group findings by category for display
+    const categoryGroups = findings.reduce<Record<string, typeof findings>>((acc, f) => {
+        const cat = f.category || "general";
+        if (!acc[cat]) acc[cat] = [];
+        acc[cat].push(f);
         return acc;
     }, {});
-    const activeEngines = Object.keys(engineGroups);
-    const filteredFindings = engineFilter ? (engineGroups[engineFilter] || []) : findings;
-
-    // Dynamic-specific findings (from frida, logcat engines)
-    const dynamicEngines = ["frida", "logcat"];
-    const dynamicFindings = findings.filter(f => dynamicEngines.includes(f.engine || ""));
+    const activeCategories = Object.keys(categoryGroups);
+    const filteredFindings = engineFilter ? (categoryGroups[engineFilter] || []) : findings;
 
     const TABS = [
         { id: "overview" as const, label: `Overview (${totalFindings})` },
         { id: "findings" as const, label: `All Findings (${totalFindings})` },
-        { id: "dynamic" as const, label: `Dynamic (${dynamicFindings.length})`, badge: scan.dynamic_status },
+        { id: "dynamic" as const, label: `Dynamic` },
     ];
 
     return (
@@ -272,24 +251,24 @@ export default function ScanDetailPage() {
                         <FileText size={22} color="white" />
                     </div>
                     <div>
-                        <h1 className="text-xl font-bold" style={{ color: "var(--text-primary)" }}>{scan.file_name}</h1>
+                        <h1 className="text-xl font-bold" style={{ color: "var(--text-primary)" }}>{scan.fileName}</h1>
                         <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-                            {new Date(scan.created_at).toLocaleString()} &bull; {(scan.file_size / 1024 / 1024).toFixed(1)} MB
+                            {new Date(scan._creationTime).toLocaleString()} &bull; {(scan.fileSize / 1024 / 1024).toFixed(1)} MB
                         </p>
                     </div>
                 </div>
 
                 <div className="flex items-center gap-3 flex-wrap">
-                    {scan.status === "completed" && (
-                        <a href={`/api/report/${scan.id}`} target="_blank" rel="noopener noreferrer"
+                    {scan.status === "completed" && scan.reportStorageId && (
+                        <a href={`/api/report/${scan._id}`} target="_blank" rel="noopener noreferrer"
                             className="btn-secondary flex items-center gap-2"
                             style={{ padding: "8px 16px", fontSize: "0.875rem", textDecoration: "none" }}
-                            title={scan.report_url ? "Download Static PDF Report" : "Open report in MobSF"}>
-                            <Download size={16} /> {scan.report_url ? "Static PDF" : "View Report"}
+                            title="Download Static PDF Report">
+                            <Download size={16} /> Static PDF
                         </a>
                     )}
-                    {scan.dynamic_report_json?.pdfPath && (
-                        <a href={`/api/dynamic-report/${scan.id}`} target="_blank" rel="noopener noreferrer"
+                    {scan.dynamicReportStorageId && (
+                        <a href={`/api/dynamic-report/${scan._id}`} target="_blank" rel="noopener noreferrer"
                             className="btn-secondary flex items-center gap-2"
                             style={{ padding: "8px 16px", fontSize: "0.875rem", textDecoration: "none", borderColor: "#a78bfa" }}
                             title="Download Dynamic Analysis PDF">
@@ -322,22 +301,6 @@ export default function ScanDetailPage() {
                 </div>
             )}
 
-            {/* Dynamic analysis in-progress banner */}
-            {!isScanning && isDynamicRunning && (
-                <div className="card mb-8" style={{ background: "linear-gradient(135deg, rgba(139,92,246,0.05), rgba(59,130,246,0.05))", border: "1px solid rgba(139,92,246,0.2)" }}>
-                    <div className="flex items-center gap-4">
-                        <Zap size={24} style={{ color: "#a78bfa" }} className="animate-pulse" />
-                        <div>
-                            <p className="font-medium" style={{ color: "var(--text-primary)" }}>Dynamic analysis running (Frida)...</p>
-                            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>Installing APK on emulator and running Frida scripts. This takes 1-3 minutes.</p>
-                        </div>
-                    </div>
-                    <div className="progress-bar mt-4">
-                        <div className="progress-fill" style={{ width: "40%", background: "#a78bfa", animation: "pulse 2s ease-in-out infinite" }} />
-                    </div>
-                </div>
-            )}
-
             {/* Main content */}
             {scan.status === "completed" && (
                 <>
@@ -363,7 +326,6 @@ export default function ScanDetailPage() {
                                     cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6
                                 }}>
                                 {tab.label}
-                                {tab.badge && <DynamicStatusBadge status={tab.badge} />}
                             </button>
                         ))}
                     </div>
@@ -374,24 +336,23 @@ export default function ScanDetailPage() {
                             <h3 className="font-semibold mb-4" style={{ color: "var(--text-primary)" }}>Security Score</h3>
                             <div className="flex items-center gap-6 mb-6">
                                 <div className="w-24 h-24 rounded-full flex items-center justify-center" style={{
-                                    background: `conic-gradient(${scan.findings_critical ? "var(--danger)" : "var(--success)"} ${Math.max(10, 100 - totalFindings * 2)}%, var(--bg-secondary) 0)`,
+                                    background: `conic-gradient(${scan.findingsCritical ? "var(--danger)" : "var(--success)"} ${Math.max(10, 100 - totalFindings * 2)}%, var(--bg-secondary) 0)`,
                                     boxShadow: "0 0 20px var(--accent-glow)"
                                 }}>
                                     <div className="w-20 h-20 rounded-full flex items-center justify-center" style={{ background: "var(--bg-card)" }}>
-                                        <span className="text-2xl font-bold" style={{ color: scan.findings_critical ? "var(--danger)" : "var(--success)" }}>
-                                            {Math.max(0, 100 - (scan.findings_critical * 20) - (scan.findings_high * 10) - (scan.findings_medium * 5) - (scan.findings_low * 2))}
+                                        <span className="text-2xl font-bold" style={{ color: scan.findingsCritical ? "var(--danger)" : "var(--success)" }}>
+                                            {Math.max(0, 100 - (scan.findingsCritical * 20) - (scan.findingsHigh * 10) - (scan.findingsMedium * 5) - (scan.findingsLow * 2))}
                                         </span>
                                     </div>
                                 </div>
                                 <div>
                                     <p className="font-medium" style={{ color: "var(--text-primary)" }}>
-                                        {scan.findings_critical > 0 ? "Critical issues found" : scan.findings_high > 0 ? "High severity issues found" : "Looking good!"}
+                                        {scan.findingsCritical > 0 ? "Critical issues found" : scan.findingsHigh > 0 ? "High severity issues found" : "Looking good!"}
                                     </p>
                                     <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-                                        {totalFindings} total findings{activeEngines.length > 0 ? ` across ${activeEngines.length} engine${activeEngines.length !== 1 ? "s" : ""}` : ""}
+                                        {totalFindings} total findings{activeCategories.length > 0 ? ` across ${activeCategories.length} categor${activeCategories.length !== 1 ? "ies" : "y"}` : ""}
                                     </p>
                                     <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                                        <DynamicStatusBadge status={scan.dynamic_status} />
                                         {dynReport?.summary && (
                                             <>
                                                 <span style={{ fontSize: "0.75rem", color: "#f97316" }}>🔓 {dynReport.summary.sslBypasses} SSL bypasses</span>
@@ -406,61 +367,12 @@ export default function ScanDetailPage() {
                                     <div key={i} style={{ width: `${(s.count / Math.max(totalFindings, 1)) * 100}%`, background: s.color, minWidth: "4px" }} />
                                 ))}
                             </div>
-
-                            {/* Engine breakdown */}
-                            {activeEngines.length > 0 && (
-                                <div style={{ marginTop: 20 }}>
-                                    <p className="text-xs font-semibold mb-3" style={{ color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Findings by Engine</p>
-                                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
-                                        {activeEngines.map(eng => {
-                                            const meta = ENGINE_META[eng] || { label: eng, color: "#9ca3af", bg: "rgba(156,163,175,0.08)", icon: "🔧" };
-                                            return (
-                                                <div key={eng} style={{ padding: "10px 12px", borderRadius: 10, background: meta.bg, textAlign: "center" }}>
-                                                    <p style={{ fontSize: "1.2rem", fontWeight: 700, color: meta.color }}>{engineGroups[eng].length}</p>
-                                                    <p style={{ fontSize: "0.7rem", color: meta.color, marginTop: 2, fontWeight: 500 }}>{meta.icon} {meta.label}</p>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                            )}
                         </div>
                     )}
 
                     {/* ── Static Findings Tab ───────────────────────── */}
                     {activeTab === "findings" && (
                         <div className="flex flex-col gap-4">
-                            {/* Engine filter bar */}
-                            <div className="flex gap-2 flex-wrap">
-                                <button
-                                    onClick={() => setEngineFilter(null)}
-                                    className="px-3 py-1.5 rounded-full text-xs font-medium transition-all"
-                                    style={{
-                                        background: !engineFilter ? "var(--accent)" : "var(--bg-secondary)",
-                                        color: !engineFilter ? "white" : "var(--text-muted)",
-                                        border: "1px solid " + (!engineFilter ? "var(--accent)" : "var(--border)"),
-                                        cursor: "pointer"
-                                    }}>
-                                    All ({totalFindings})
-                                </button>
-                                {activeEngines.map(eng => {
-                                    const meta = ENGINE_META[eng] || { label: eng, color: "#9ca3af", bg: "rgba(156,163,175,0.12)", icon: "🔧" };
-                                    return (
-                                        <button key={eng}
-                                            onClick={() => setEngineFilter(engineFilter === eng ? null : eng)}
-                                            className="px-3 py-1.5 rounded-full text-xs font-medium transition-all"
-                                            style={{
-                                                background: engineFilter === eng ? meta.bg : "var(--bg-secondary)",
-                                                color: engineFilter === eng ? meta.color : "var(--text-muted)",
-                                                border: "1px solid " + (engineFilter === eng ? meta.color : "var(--border)"),
-                                                cursor: "pointer"
-                                            }}>
-                                            {meta.icon} {meta.label} ({engineGroups[eng].length})
-                                        </button>
-                                    );
-                                })}
-                            </div>
-
                             {/* Findings list */}
                             {filteredFindings.length === 0 ? (
                                 <div className="card text-center py-8">
@@ -469,19 +381,17 @@ export default function ScanDetailPage() {
                                 </div>
                             ) : (
                                 filteredFindings.map((f) => (
-                                    <details key={f.id} className="card" style={{ padding: 0 }}>
+                                    <details key={f._id} className="card" style={{ padding: 0 }}>
                                         <summary className="flex items-center gap-3 cursor-pointer p-4 list-none" style={{ color: "var(--text-primary)" }}>
                                             <span className={`badge badge-${f.severity?.toLowerCase()}`}>{f.severity}</span>
                                             <span className="font-medium text-sm flex-1">{f.title}</span>
-                                            <EngineBadge engine={f.engine || "mobsf"} />
                                             <span className="text-xs px-2 py-0.5 rounded" style={{ background: "var(--bg-secondary)", color: "var(--text-muted)" }}>{f.category}</span>
                                         </summary>
                                         <div className="px-4 pb-4 border-t" style={{ borderColor: "var(--border)" }}>
                                             <p className="text-sm mt-3 mb-3 leading-relaxed" style={{ color: "var(--text-secondary)" }}>{f.description}</p>
-                                            {f.owasp_category && (
+                                            {f.owaspCategory && (
                                                 <p className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>
-                                                    📋 <strong>OWASP:</strong> {f.owasp_category}
-                                                    {f.owasp_masvs && <span className="ml-2">({f.owasp_masvs})</span>}
+                                                    📋 <strong>OWASP:</strong> {f.owaspCategory}
                                                 </p>
                                             )}
                                             {f.recommendation && (
@@ -513,7 +423,6 @@ export default function ScanDetailPage() {
                                             </p>
                                         </div>
                                     </div>
-                                    <DynamicStatusBadge status={scan.dynamic_status} />
                                 </div>
 
                                 {/* Summary stats */}
@@ -525,10 +434,6 @@ export default function ScanDetailPage() {
                                             { label: "Root Bypasses", value: dynReport.summary.rootBypasses, color: "#f59e0b" },
                                             { label: "Crypto Ops", value: dynReport.summary.cryptoOps || 0, color: "#c084fc" },
                                             { label: "Network Calls", value: dynReport.summary.networkCalls || 0, color: "#38bdf8" },
-                                            { label: "Storage Access", value: dynReport.summary.storageAccess || 0, color: "#fbbf24" },
-                                            { label: "Auth Events", value: dynReport.summary.authEvents || 0, color: "#a78bfa" },
-                                            { label: "Platform", value: dynReport.summary.platformIssues || 0, color: "#fb923c" },
-                                            { label: "Resilience", value: dynReport.summary.resilienceBypasses || 0, color: "#f87171" },
                                             { label: "Total Hooks", value: dynReport.summary.totalHooks, color: "#60a5fa" },
                                             { label: "Findings", value: dynReport.summary.findingsExtracted, color: "#34d399" },
                                         ].map((stat, i) => (
@@ -540,31 +445,6 @@ export default function ScanDetailPage() {
                                     </div>
                                 )}
                             </div>
-
-                            {/* Skipped / Failed state */}
-                            {scan.dynamic_status === "skipped" && (
-                                <div className="card text-center py-8" style={{ border: "1px solid rgba(245,158,11,0.2)" }}>
-                                    <WifiOff size={36} className="mx-auto mb-3" style={{ color: "#f59e0b", opacity: 0.7 }} />
-                                    <p className="font-medium mb-2" style={{ color: "var(--text-primary)" }}>Dynamic analysis was skipped</p>
-                                    <p className="text-sm mb-4" style={{ color: "var(--text-muted)" }}>{dynReport?.reason || "No Android emulator was connected when the scan ran."}</p>
-                                    <div style={{ background: "var(--bg-secondary)", borderRadius: 8, padding: "12px 16px", textAlign: "left", maxWidth: 400, margin: "0 auto" }}>
-                                        <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginBottom: 6, fontWeight: 600 }}>To enable dynamic analysis:</p>
-                                        <ol style={{ fontSize: "0.8rem", color: "var(--text-secondary)", paddingLeft: 16, lineHeight: 1.8 }}>
-                                            <li>Run <code style={{ color: "#a78bfa" }}>.\setup-emulator.ps1</code> to launch the emulator</li>
-                                            <li>Upload the APK again — the worker auto-detects it</li>
-                                            <li>Frida scripts run automatically in the background</li>
-                                        </ol>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Not run state */}
-                            {(!scan.dynamic_status || scan.dynamic_status === "not_run") && (
-                                <div className="card text-center py-8">
-                                    <Shield size={36} className="mx-auto mb-3 opacity-30" style={{ color: "var(--text-muted)" }} />
-                                    <p style={{ color: "var(--text-muted)" }}>Dynamic analysis data not available for this scan.</p>
-                                </div>
-                            )}
 
                             {/* Frida script output cards */}
                             {dynReport?.scripts && dynReport.scripts.length > 0 && (
@@ -578,39 +458,11 @@ export default function ScanDetailPage() {
                                 </div>
                             )}
 
-                            {/* Dynamic findings */}
-                            {dynamicFindings.length > 0 && (
-                                <div className="flex flex-col gap-3">
-                                    <h3 style={{ fontSize: "0.875rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                                        Dynamic Findings ({dynamicFindings.length})
-                                    </h3>
-                                    {dynamicFindings.map((f) => (
-                                        <details key={f.id} className="card" style={{ padding: 0 }}>
-                                            <summary className="flex items-center gap-3 cursor-pointer p-4 list-none" style={{ color: "var(--text-primary)" }}>
-                                                <span className={`badge badge-${f.severity?.toLowerCase()}`}>{f.severity}</span>
-                                                <span className="font-medium text-sm flex-1">{f.title}</span>
-                                                {f.owasp_category && (
-                                                    <span className="text-xs px-2 py-0.5 rounded" style={{ background: "rgba(139,92,246,0.1)", color: "#a78bfa" }}>
-                                                        {f.owasp_category}
-                                                    </span>
-                                                )}
-                                            </summary>
-                                            <div className="px-4 pb-4 border-t" style={{ borderColor: "var(--border)" }}>
-                                                <pre className="text-sm mt-3 mb-3 leading-relaxed" style={{
-                                                    color: "var(--text-secondary)", fontFamily: "inherit",
-                                                    whiteSpace: "pre-wrap", wordBreak: "break-word"
-                                                }}>
-                                                    {f.description}
-                                                </pre>
-                                                {f.recommendation && (
-                                                    <div className="p-3 rounded-lg" style={{ background: "rgba(16,185,129,0.05)", border: "1px solid rgba(16,185,129,0.15)" }}>
-                                                        <p className="text-xs font-medium mb-1" style={{ color: "var(--success)" }}>Recommendation</p>
-                                                        <p className="text-sm" style={{ color: "var(--text-secondary)" }}>{f.recommendation}</p>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </details>
-                                    ))}
+                            {/* No dynamic data */}
+                            {!dynReport && (
+                                <div className="card text-center py-8">
+                                    <Shield size={36} className="mx-auto mb-3 opacity-30" style={{ color: "var(--text-muted)" }} />
+                                    <p style={{ color: "var(--text-muted)" }}>Dynamic analysis data not available for this scan.</p>
                                 </div>
                             )}
                         </div>

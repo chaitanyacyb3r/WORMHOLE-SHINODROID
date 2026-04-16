@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# ShinobiDroid — Docker Compose Override (Development)
+# Shinodroid — Docker Compose Override (Development)
 #
 # Automatically loaded by `docker compose up` alongside docker-compose.yml.
 # Adds hot-reload, source mounts, and dev-friendly settings.

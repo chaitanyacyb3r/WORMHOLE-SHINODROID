@@ -1,5 +1,5 @@
 /**
- * ShinobiDroid — Androwarn Behavior Analysis Engine
+ * Shinodroid — Androwarn Behavior Analysis Engine
  *
  * Static analysis that detects 12 categories of potentially malicious behavior:
  *   - Telephony ID exfiltration (IMEI, IMSI)

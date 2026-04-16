@@ -12,7 +12,7 @@ const SRC = path.join(
     '9da90768-bcf1-4ed9-97dc-e052968dbb2a', 'pitch-deck.md'
 );
 const TEMP = path.join(__dirname, '_pitch-deck-temp.md');
-const OUT = path.join(__dirname, 'ShinobiDroid-PitchDeck-2026.pdf');
+const OUT = path.join(__dirname, 'Shinodroid-PitchDeck-2026.pdf');
 
 if (!fs.existsSync(SRC)) {
     console.error('pitch-deck.md not found at: ' + SRC);

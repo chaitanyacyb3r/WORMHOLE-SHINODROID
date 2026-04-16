@@ -1,5 +1,5 @@
 # ============================================================
-# WORMHOLE // ShinobiDroid - Comprehensive Firewall Hardening
+# WORMHOLE // Shinodroid - Comprehensive Firewall Hardening
 # Run as Administrator: Right-click -> Run as Administrator
 #
 # Blocks external access to ALL security-sensitive ports:
@@ -12,7 +12,7 @@
 # ============================================================
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "  Firewall Hardening - WORMHOLE // ShinobiDroid" -ForegroundColor Cyan
+Write-Host "  Firewall Hardening - WORMHOLE // Shinodroid" -ForegroundColor Cyan
 Write-Host "  Covering: MobSF, OpenClaw, Next.js, ADB, Frida" -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
@@ -30,7 +30,7 @@ if (-not $isAdmin) {
 $rules = @(
     @{ Name = "MobSF";          Port = "8000";      Desc = "MobSF Static Analysis Server" },
     @{ Name = "OpenClaw";       Port = "18789";     Desc = "OpenClaw Gateway (1-click RCE vector)" },
-    @{ Name = "NextJS";         Port = "3000";      Desc = "ShinobiDroid Dashboard" },
+    @{ Name = "NextJS";         Port = "3000";      Desc = "Shinodroid Dashboard" },
     @{ Name = "ADB";            Port = "5037";      Desc = "ADB Server (device control)" },
     @{ Name = "Frida";          Port = "27042";     Desc = "Frida Server (code injection)" },
     @{ Name = "Emulator-Console"; Port = "5554-5585"; Desc = "Android Emulator ports" }
@@ -40,8 +40,8 @@ $step = 1
 $total = $rules.Count * 2  # block + allow per rule
 
 foreach ($rule in $rules) {
-    $blockName = "ShinobiDroid-Block-$($rule.Name)-External"
-    $allowName = "ShinobiDroid-Allow-$($rule.Name)-Localhost"
+    $blockName = "Shinodroid-Block-$($rule.Name)-External"
+    $allowName = "Shinodroid-Allow-$($rule.Name)-Localhost"
 
     # Block external inbound
     Write-Host "[$step/$total] Blocking external access to $($rule.Name) (port $($rule.Port))..." -ForegroundColor Yellow
@@ -65,8 +65,8 @@ foreach ($rule in $rules) {
 # ── Block outbound from Frida server (prevent data exfil) ──
 Write-Host ""
 Write-Host "[$step/$total] Blocking outbound from Frida port (prevent exfil)..." -ForegroundColor Yellow
-netsh advfirewall firewall delete rule name="ShinobiDroid-Block-Frida-Outbound" >$null 2>&1
-netsh advfirewall firewall add rule name="ShinobiDroid-Block-Frida-Outbound" dir=out localport=27042 protocol=tcp action=block profile=any | Out-Null
+netsh advfirewall firewall delete rule name="Shinodroid-Block-Frida-Outbound" >$null 2>&1
+netsh advfirewall firewall add rule name="Shinodroid-Block-Frida-Outbound" dir=out localport=27042 protocol=tcp action=block profile=any | Out-Null
 Write-Host "  [+] Outbound block added" -ForegroundColor Green
 
 # ── Verification ────────────────────────────────────────────
@@ -78,7 +78,7 @@ Write-Host "==================================================" -ForegroundColor
 $allRules = netsh advfirewall firewall show rule name=all | Out-String
 $failures = 0
 foreach ($rule in $rules) {
-    $blockName = "ShinobiDroid-Block-$($rule.Name)-External"
+    $blockName = "Shinodroid-Block-$($rule.Name)-External"
     if ($allRules -match [regex]::Escape($blockName)) {
         Write-Host "  [OK] $blockName" -ForegroundColor Green
     } else {

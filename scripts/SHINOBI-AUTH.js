@@ -1,6 +1,6 @@
 // ================================================================
 // SHINOBI-AUTH.js — Authentication & Authorization Monitor
-// ShinobiDroid 忍ドロイド — MASVS-AUTH (M6)
+// Shinodroid 忍ドロイド — MASVS-AUTH (M6)
 //
 // Monitors biometric authentication, fingerprint APIs, account
 // management, keyguard interactions, and JavaScript bridge usage

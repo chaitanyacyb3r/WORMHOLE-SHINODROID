@@ -1,145 +1,740 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Shield, Mail, Lock, ArrowRight, Github, User } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import {
+  Mail,
+  Lock,
+  ArrowRight,
+  Github,
+  User,
+  Eye,
+  EyeOff,
+  KeyRound,
+  ShieldCheck,
+} from "lucide-react";
+import { useAuthActions } from "@convex-dev/auth/react";
+import { useConvexAuth } from "convex/react";
+
+/* ── Password Strength ── */
+function getPasswordStrength(pwd: string) {
+  let score = 0;
+  if (pwd.length >= 8) score++;
+  if (pwd.length >= 12) score++;
+  if (/[a-z]/.test(pwd) && /[A-Z]/.test(pwd)) score++;
+  if (/\d/.test(pwd)) score++;
+  if (/[^a-zA-Z0-9]/.test(pwd)) score++;
+
+  if (score <= 1) return { label: "Weak", color: "#ef4444", percent: 25 };
+  if (score <= 2) return { label: "Fair", color: "#f97316", percent: 50 };
+  if (score <= 3) return { label: "Good", color: "#f59e0b", percent: 75 };
+  return { label: "Strong", color: "#10b981", percent: 100 };
+}
 
 export default function SignupPage() {
-    const [name, setName] = useState("");
-    const [email, setEmail] = useState("");
-    const [password, setPassword] = useState("");
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState("");
-    const [success, setSuccess] = useState(false);
-    const router = useRouter();
-    const supabase = createClient();
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const { signIn } = useAuthActions();
+  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
+  const hasRedirected = useRef(false);
 
-    async function handleSignup(e: React.FormEvent) {
-        e.preventDefault();
-        setLoading(true);
-        setError("");
+  const strength = useMemo(() => getPasswordStrength(password), [password]);
 
-        if (password.length < 8) {
-            setError("Password must be at least 8 characters");
-            setLoading(false);
-            return;
-        }
+  useEffect(() => {
+    console.log("[SIGNUP PAGE] 📊 Auth state:", {
+      isAuthenticated,
+      authLoading,
+      hasRedirected: hasRedirected.current,
+      timestamp: new Date().toISOString(),
+    });
+  }, [isAuthenticated, authLoading]);
 
-        const { error } = await supabase.auth.signUp({
-            email,
-            password,
-            options: { data: { full_name: name } },
-        });
+  useEffect(() => {
+    if (isAuthenticated && !authLoading && !hasRedirected.current) {
+      hasRedirected.current = true;
+      console.log(
+        "[SIGNUP PAGE] 🚀 Auth confirmed! Redirecting to /dashboard..."
+      );
+      window.location.href = "/dashboard";
+    }
+  }, [isAuthenticated, authLoading]);
 
-        if (error) {
-            setError(error.message);
-            setLoading(false);
-        } else {
-            setSuccess(true);
-        }
+  async function handleSignup(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters");
+      setLoading(false);
+      return;
     }
 
-    async function handleGithubSignup() {
-        await supabase.auth.signInWithOAuth({
-            provider: "github",
-            options: { redirectTo: `${window.location.origin}/auth/callback` },
-        });
+    try {
+      console.log("[SIGNUP] 🚀 Calling signIn('password', signUp) for:", email);
+      const result = await signIn("password", {
+        email,
+        password,
+        name,
+        flow: "signUp",
+      });
+      console.log("[SIGNUP] ✅ signIn returned:", JSON.stringify(result));
+    } catch (err: unknown) {
+      console.error("[SIGNUP] ❌ signIn threw:", err);
+      const message =
+        err instanceof Error ? err.message : "Signup failed. Please try again.";
+      setError(message);
+      setLoading(false);
     }
+  }
 
-    if (success) {
-        return (
-            <div className="min-h-screen flex items-center justify-center px-6">
-                <div className="card text-center max-w-md">
-                    <div className="w-16 h-16 rounded-full mx-auto mb-6 flex items-center justify-center" style={{ background: "rgba(16,185,129,0.15)" }}>
-                        <Mail size={28} style={{ color: "var(--success)" }} />
-                    </div>
-                    <h2 className="text-xl font-bold mb-3" style={{ color: "var(--text-primary)" }}>Check your email</h2>
-                    <p className="mb-6" style={{ color: "var(--text-secondary)" }}>
-                        We sent a confirmation link to <strong style={{ color: "var(--text-primary)" }}>{email}</strong>.
-                        Click the link to activate your account.
-                    </p>
-                    <Link href="/login" className="btn-secondary" style={{ textDecoration: "none" }}>
-                        Back to Login
-                    </Link>
-                </div>
-            </div>
-        );
+  async function handleGithubSignup() {
+    try {
+      await signIn("github");
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "GitHub signup failed";
+      setError(message);
     }
+  }
 
+  /* ── Loading / Redirect states ── */
+  if (authLoading) {
     return (
-        <div className="min-h-screen flex items-center justify-center px-6 relative">
-            <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full opacity-15 blur-[100px]" style={{ background: "radial-gradient(circle, var(--gradient-end), transparent)" }} />
-
-            <div className="w-full max-w-md relative z-10">
-                <div className="text-center mb-8">
-                    <Link href="/" className="inline-flex items-center gap-3 no-underline mb-6">
-                        <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, var(--gradient-start), var(--gradient-end))" }}>
-                            <Shield size={22} color="white" />
-                        </div>
-                        <span className="text-xl font-bold" style={{ color: "var(--text-primary)" }}>ShinobiDroid</span>
-                    </Link>
-                    <h1 className="text-2xl font-bold mb-2" style={{ color: "var(--text-primary)" }}>Create your account</h1>
-                    <p style={{ color: "var(--text-secondary)" }}>Start scanning APKs for free</p>
-                </div>
-
-                <div className="card">
-                    <button onClick={handleGithubSignup} className="btn-secondary w-full flex items-center justify-center gap-3" style={{ marginBottom: "20px" }}>
-                        <Github size={18} />
-                        Sign up with GitHub
-                    </button>
-
-                    <div className="flex items-center gap-3 mb-5">
-                        <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
-                        <span className="text-xs" style={{ color: "var(--text-muted)" }}>OR</span>
-                        <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
-                    </div>
-
-                    <form onSubmit={handleSignup} className="flex flex-col gap-4">
-                        <div>
-                            <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-secondary)" }}>Full Name</label>
-                            <div className="relative">
-                                <User size={16} className="absolute left-4 top-1/2 -translate-y-1/2" style={{ color: "var(--text-muted)" }} />
-                                <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" required className="input" style={{ paddingLeft: "44px" }} />
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-secondary)" }}>Email</label>
-                            <div className="relative">
-                                <Mail size={16} className="absolute left-4 top-1/2 -translate-y-1/2" style={{ color: "var(--text-muted)" }} />
-                                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required className="input" style={{ paddingLeft: "44px" }} />
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-secondary)" }}>Password</label>
-                            <div className="relative">
-                                <Lock size={16} className="absolute left-4 top-1/2 -translate-y-1/2" style={{ color: "var(--text-muted)" }} />
-                                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Min. 8 characters" required minLength={8} className="input" style={{ paddingLeft: "44px" }} />
-                            </div>
-                        </div>
-
-                        {error && (
-                            <p className="text-sm px-3 py-2 rounded-lg" style={{ background: "rgba(239,68,68,0.1)", color: "var(--danger)", border: "1px solid rgba(239,68,68,0.2)" }}>
-                                {error}
-                            </p>
-                        )}
-
-                        <button type="submit" disabled={loading} className="btn-primary w-full flex items-center justify-center gap-2" style={{ marginTop: "4px" }}>
-                            {loading ? "Creating account..." : <><span>Create Account</span><ArrowRight size={16} /></>}
-                        </button>
-                    </form>
-                </div>
-
-                <p className="text-center mt-6 text-sm" style={{ color: "var(--text-muted)" }}>
-                    Already have an account?{" "}
-                    <Link href="/login" className="font-medium" style={{ color: "var(--accent)" }}>
-                        Sign in
-                    </Link>
-                </p>
-            </div>
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "var(--surface-0)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "12px",
+            color: "var(--text-muted)",
+          }}
+        >
+          <div
+            style={{
+              width: "32px",
+              height: "32px",
+              border: "2px solid var(--accent)",
+              borderTopColor: "transparent",
+              borderRadius: "50%",
+              animation: "spin 1s linear infinite",
+            }}
+          />
+          <span style={{ fontSize: "var(--text-body-sm)" }}>
+            Checking session...
+          </span>
         </div>
+      </div>
     );
+  }
+
+  if (isAuthenticated) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "var(--surface-0)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "12px",
+            color: "var(--text-muted)",
+          }}
+        >
+          <div
+            style={{
+              width: "32px",
+              height: "32px",
+              border: "2px solid var(--accent)",
+              borderTopColor: "transparent",
+              borderRadius: "50%",
+              animation: "spin 1s linear infinite",
+            }}
+          />
+          <span style={{ fontSize: "var(--text-body-sm)" }}>
+            Redirecting to dashboard...
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── Main Signup ── */
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr",
+        background: "var(--surface-0)",
+      }}
+    >
+      {/* ── LEFT: Branding Panel ── */}
+      <div
+        style={{
+          position: "relative",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          overflow: "hidden",
+          padding: "48px",
+        }}
+      >
+        {/* Grid pattern */}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            backgroundImage: `linear-gradient(rgba(124,58,237,0.06) 1px, transparent 1px),
+              linear-gradient(90deg, rgba(124,58,237,0.06) 1px, transparent 1px)`,
+            backgroundSize: "40px 40px",
+            pointerEvents: "none",
+          }}
+        />
+        {/* Radial glow */}
+        <div
+          style={{
+            position: "absolute",
+            top: "40%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            width: "500px",
+            height: "500px",
+            borderRadius: "50%",
+            opacity: 0.08,
+            filter: "blur(100px)",
+            background:
+              "radial-gradient(circle, var(--accent), transparent 70%)",
+            pointerEvents: "none",
+          }}
+        />
+
+        {/* Floating security icons */}
+        <div
+          style={{
+            position: "absolute",
+            top: "15%",
+            left: "20%",
+            color: "var(--text-muted)",
+            opacity: 0.15,
+            transform: "rotate(-15deg)",
+          }}
+        >
+          <KeyRound size={40} />
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            top: "10%",
+            right: "25%",
+            color: "var(--text-muted)",
+            opacity: 0.12,
+            transform: "rotate(10deg)",
+          }}
+        >
+          <Lock size={48} />
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            bottom: "20%",
+            left: "15%",
+            color: "var(--text-muted)",
+            opacity: 0.1,
+            transform: "rotate(20deg)",
+          }}
+        >
+          <ShieldCheck size={36} />
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            bottom: "30%",
+            right: "15%",
+            color: "var(--text-muted)",
+            opacity: 0.08,
+            transform: "rotate(-10deg)",
+          }}
+        >
+          <ShieldCheck size={44} />
+        </div>
+
+        {/* Logo + brand */}
+        <div
+          style={{
+            position: "relative",
+            zIndex: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "16px",
+          }}
+        >
+          <img
+            src="/logo.png"
+            alt="Shinodroid"
+            width={80}
+            height={80}
+            style={{
+              objectFit: "contain",
+            }}
+          />
+          <h2
+            style={{
+              fontSize: "var(--text-h2)",
+              fontWeight: 700,
+              color: "var(--text-primary)",
+              margin: 0,
+            }}
+          >
+            Shinodroid
+          </h2>
+          <p
+            style={{
+              fontSize: "var(--text-body-sm)",
+              color: "var(--text-muted)",
+              margin: 0,
+            }}
+          >
+            by WORMHOLE Security
+          </p>
+        </div>
+
+        {/* Testimonial */}
+        <div
+          style={{
+            position: "absolute",
+            bottom: "48px",
+            left: "48px",
+            right: "48px",
+            background: "var(--glass-bg)",
+            backdropFilter: "blur(16px)",
+            border: "1px solid var(--glass-border)",
+            borderRadius: "var(--radius-base)",
+            padding: "20px 24px",
+            zIndex: 1,
+          }}
+        >
+          <p
+            style={{
+              fontSize: "var(--text-body-sm)",
+              color: "var(--text-secondary)",
+              lineHeight: 1.6,
+              margin: 0,
+              marginBottom: "12px",
+              fontStyle: "italic",
+            }}
+          >
+            &ldquo;We integrated Shinodroid into our CI pipeline. Now every APK
+            build gets scanned automatically. Found 12 issues in the first week
+            alone.&rdquo;
+          </p>
+          <p
+            style={{
+              fontSize: "var(--text-caption)",
+              color: "var(--text-muted)",
+              margin: 0,
+            }}
+          >
+            — Sarah K., Mobile Lead at Fintech Startup
+          </p>
+        </div>
+      </div>
+
+      {/* ── RIGHT: Signup Form ── */}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "48px",
+          background: "var(--surface-1)",
+        }}
+      >
+        <div style={{ width: "100%", maxWidth: "400px" }}>
+          <h1
+            style={{
+              fontSize: "var(--text-h2)",
+              fontWeight: 700,
+              color: "var(--text-primary)",
+              marginBottom: "var(--space-xs)",
+            }}
+          >
+            Create your account
+          </h1>
+          <p
+            style={{
+              fontSize: "var(--text-body)",
+              color: "var(--text-secondary)",
+              marginBottom: "var(--space-xl)",
+            }}
+          >
+            Start analyzing your Android apps for security vulnerabilities
+          </p>
+
+          {/* GitHub */}
+          <button
+            onClick={handleGithubSignup}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "10px",
+              padding: "12px 20px",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--border)",
+              background: "var(--surface-2)",
+              color: "var(--text-primary)",
+              fontSize: "var(--text-body-sm)",
+              fontWeight: 500,
+              cursor: "pointer",
+              transition: "background var(--duration-fast), border-color var(--duration-fast)",
+              marginBottom: "var(--space-lg)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--surface-3)";
+              e.currentTarget.style.borderColor = "var(--border-strong)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "var(--surface-2)";
+              e.currentTarget.style.borderColor = "var(--border)";
+            }}
+          >
+            <Github size={18} />
+            Continue with GitHub
+          </button>
+
+          {/* Divider */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "16px",
+              marginBottom: "var(--space-lg)",
+            }}
+          >
+            <div
+              style={{ flex: 1, height: "1px", background: "var(--border)" }}
+            />
+            <span
+              style={{
+                fontSize: "var(--text-caption)",
+                color: "var(--text-muted)",
+              }}
+            >
+              or
+            </span>
+            <div
+              style={{ flex: 1, height: "1px", background: "var(--border)" }}
+            />
+          </div>
+
+          {/* Form */}
+          <form
+            onSubmit={handleSignup}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "var(--space-lg)",
+            }}
+          >
+            {/* Full Name */}
+            <div>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: "var(--text-body-sm)",
+                  fontWeight: 500,
+                  color: "var(--text-secondary)",
+                  marginBottom: "var(--space-sm)",
+                }}
+              >
+                Full Name
+              </label>
+              <div style={{ position: "relative" }}>
+                <User
+                  size={16}
+                  style={{
+                    position: "absolute",
+                    left: "14px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    color: "var(--text-muted)",
+                    pointerEvents: "none",
+                  }}
+                />
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="John Doe"
+                  required
+                  className="input"
+                  style={{ paddingLeft: "42px", width: "100%", boxSizing: "border-box" }}
+                />
+              </div>
+            </div>
+
+            {/* Email */}
+            <div>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: "var(--text-body-sm)",
+                  fontWeight: 500,
+                  color: "var(--text-secondary)",
+                  marginBottom: "var(--space-sm)",
+                }}
+              >
+                Email
+              </label>
+              <div style={{ position: "relative" }}>
+                <Mail
+                  size={16}
+                  style={{
+                    position: "absolute",
+                    left: "14px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    color: "var(--text-muted)",
+                    pointerEvents: "none",
+                  }}
+                />
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  required
+                  className="input"
+                  style={{ paddingLeft: "42px", width: "100%", boxSizing: "border-box" }}
+                />
+              </div>
+            </div>
+
+            {/* Password + Strength Meter */}
+            <div>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: "var(--text-body-sm)",
+                  fontWeight: 500,
+                  color: "var(--text-secondary)",
+                  marginBottom: "var(--space-sm)",
+                }}
+              >
+                Password
+              </label>
+              <div style={{ position: "relative" }}>
+                <Lock
+                  size={16}
+                  style={{
+                    position: "absolute",
+                    left: "14px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    color: "var(--text-muted)",
+                    pointerEvents: "none",
+                  }}
+                />
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Create a strong password"
+                  required
+                  minLength={8}
+                  className="input"
+                  style={{
+                    paddingLeft: "42px",
+                    paddingRight: "42px",
+                    width: "100%",
+                    boxSizing: "border-box",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  style={{
+                    position: "absolute",
+                    right: "14px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    color: "var(--text-muted)",
+                    padding: 0,
+                    display: "flex",
+                  }}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+
+              {/* Strength meter */}
+              {password.length > 0 && (
+                <div
+                  style={{
+                    marginTop: "var(--space-sm)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                  }}
+                >
+                  <div
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      gap: "4px",
+                    }}
+                  >
+                    {[1, 2, 3, 4].map((seg) => (
+                      <div
+                        key={seg}
+                        style={{
+                          flex: 1,
+                          height: "4px",
+                          borderRadius: "2px",
+                          background:
+                            seg <= Math.ceil(strength.percent / 25)
+                              ? strength.color
+                              : "var(--surface-3)",
+                          transition: "background var(--duration-fast)",
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <span
+                    style={{
+                      fontSize: "var(--text-caption)",
+                      fontWeight: 600,
+                      color: strength.color,
+                      minWidth: "48px",
+                      textAlign: "right",
+                    }}
+                  >
+                    {strength.label}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Error */}
+            {error && (
+              <div
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: "var(--radius-sm)",
+                  background: "rgba(239,68,68,0.08)",
+                  border: "1px solid rgba(239,68,68,0.2)",
+                  color: "var(--danger)",
+                  fontSize: "var(--text-body-sm)",
+                }}
+              >
+                {error}
+              </div>
+            )}
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn-primary"
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+                padding: "12px 24px",
+                fontSize: "var(--text-body)",
+                fontWeight: 600,
+                cursor: loading ? "not-allowed" : "pointer",
+                opacity: loading ? 0.7 : 1,
+              }}
+            >
+              {loading ? (
+                "Creating account..."
+              ) : (
+                <>
+                  Create Account <ArrowRight size={16} />
+                </>
+              )}
+            </button>
+          </form>
+
+          {/* Terms + footer */}
+          <p
+            style={{
+              textAlign: "center",
+              marginTop: "var(--space-lg)",
+              fontSize: "var(--text-caption)",
+              color: "var(--text-muted)",
+              lineHeight: 1.5,
+            }}
+          >
+            By creating an account, you agree to our{" "}
+            <a
+              href="#"
+              style={{ color: "var(--text-secondary)", textDecoration: "underline" }}
+            >
+              Terms of Service
+            </a>{" "}
+            and{" "}
+            <a
+              href="#"
+              style={{ color: "var(--text-secondary)", textDecoration: "underline" }}
+            >
+              Privacy Policy
+            </a>
+          </p>
+
+          <p
+            style={{
+              textAlign: "center",
+              marginTop: "var(--space-md)",
+              fontSize: "var(--text-body-sm)",
+              color: "var(--text-muted)",
+            }}
+          >
+            Already have an account?{" "}
+            <Link
+              href="/login"
+              style={{
+                color: "var(--accent)",
+                textDecoration: "none",
+                fontWeight: 500,
+              }}
+            >
+              Sign in →
+            </Link>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 }

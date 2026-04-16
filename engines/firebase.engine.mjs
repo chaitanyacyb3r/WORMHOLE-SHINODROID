@@ -1,5 +1,5 @@
 /**
- * ShinobiDroid — Firebase Misconfiguration Detection Engine
+ * Shinodroid — Firebase Misconfiguration Detection Engine
  *
  * Extracts Firebase project URLs from the APK's static analysis report
  * and checks for common misconfigurations:

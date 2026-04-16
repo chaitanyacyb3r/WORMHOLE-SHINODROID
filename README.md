@@ -1,4 +1,4 @@
-# ShinobiDroid 忍ドロイド
+# Shinodroid 忍ドロイド
 
 > **Automated Android Security Analysis Platform**  
 > Static analysis · Dynamic instrumentation · AI-generated reports · Web dashboard
@@ -7,7 +7,7 @@
 
 ## What It Does
 
-ShinobiDroid is a full-stack Android pentesting pipeline. You upload an APK — it runs every analysis tool automatically and produces a professional, documented security report.
+Shinodroid is a full-stack Android pentesting pipeline. You upload an APK — it runs every analysis tool automatically and produces a professional, documented security report.
 
 ```
 Upload APK (web dashboard / Telegram / folder drop)
@@ -51,8 +51,8 @@ Install these **before** cloning the project. All are free.
 ### Step 1 — Clone the Project
 
 ```powershell
-git clone https://github.com/YOUR_USERNAME/wormhole-shinobidroid.git
-cd wormhole-shinobidroid
+git clone https://github.com/YOUR_USERNAME/wormhole-Shinodroid.git
+cd wormhole-Shinodroid
 ```
 
 ### Step 2 — Install Dependencies
@@ -191,7 +191,7 @@ This worker polls Supabase for new APKs, runs all engines, uploads the results, 
 ## Project Structure
 
 ```
-wormhole-shinobidroid/
+wormhole-Shinodroid/
 │
 ├── web/                        # Next.js web dashboard (TypeScript)
 │   ├── src/app/dashboard/      # Dashboard pages (scan, reports, settings)
@@ -199,7 +199,7 @@ wormhole-shinobidroid/
 │   └── supabase-dynamic-migration.sql  # Run this in Supabase SQL Editor
 │
 ├── engines/                    # Analysis engine plugins
-│   ├── ai.engine.mjs           # AI report generation (MiniMax via Ollama)
+│   ├── ai.engine.mjs           # AI report generation (MiniMax via )
 │   ├── mobsf.engine.mjs        # MobSF static analysis
 │   ├── androwarn.engine.mjs    # Malicious behavior detection
 │   ├── firebase.engine.mjs     # Firebase misconfiguration scanner
@@ -237,7 +237,7 @@ wormhole-shinobidroid/
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | Supabase anon (public) key |
 | `SUPABASE_SERVICE_ROLE_KEY` | ✅ | Supabase service role key (worker only) |
 | `OLLAMA_BASE_URL` | Optional | Ollama URL (default: `http://127.0.0.1:11434`) |
-| `OLLAMA_MODEL` | Optional | Model name (default: `minimax-text-01:cloud`) |
+| `_MODEL` | Optional | Model name (default: `minimax-text-01:cloud`) |
 | `TELEGRAM_BOT_TOKEN` | Optional | Telegram bot token (disables Telegram if blank) |
 | `TELEGRAM_ALLOWED_CHATS` | Optional | Comma-separated allowed chat IDs |
 
@@ -283,8 +283,8 @@ node reporting\convert.js path\to\ai-security-analysis.md
 **Frida engine skipped**  
 → Normal if no emulator is running. Start the emulator from Android Studio first, then re-run the scan.
 
-**Ollama / AI engine skipped**  
-→ Run `ollama serve` and `ollama pull minimax-text-01:cloud` first.
+** / AI engine skipped**  
+→ Run ` serve` and ` pull minimax-text-01:cloud` first.
 
 ---
 
@@ -300,7 +300,7 @@ See the **"GitHub Setup"** section at the bottom of this README.
 
 1. Go to https://github.com and sign in
 2. Click **+** → **New repository**
-3. Name it: `wormhole-shinobidroid` (or anything you like)
+3. Name it: `wormhole-Shinodroid` (or anything you like)
 4. Set to **Private** (recommended — this has security tool code)
 5. **Do NOT** tick "Add README" or "Add .gitignore" (you already have them)
 6. Click **Create repository**
@@ -315,10 +315,10 @@ cd C:\Users\elliot\Documents\OPENCLAW-SECURITY-INTEGRITY
 # If git isn't initialized yet:
 git init
 git add .
-git commit -m "Initial commit: ShinobiDroid Android pentesting platform"
+git commit -m "Initial commit: Shinodroid Android pentesting platform"
 
 # Link to your new GitHub repo:
-git remote add origin https://github.com/YOUR_USERNAME/wormhole-shinobidroid.git
+git remote add origin https://github.com/YOUR_USERNAME/wormhole-Shinodroid.git
 
 # Push:
 git branch -M main
@@ -330,8 +330,8 @@ git push -u origin main
 Your friend clones it and follows the Setup Guide above:
 
 ```powershell
-git clone https://github.com/YOUR_USERNAME/wormhole-shinobidroid.git
-cd wormhole-shinobidroid
+git clone https://github.com/YOUR_USERNAME/wormhole-Shinodroid.git
+cd wormhole-Shinodroid
 
 # Install all dependencies
 npm install
@@ -347,4 +347,4 @@ Copy-Item .env.example .env
 
 ---
 
-*ShinobiDroid 忍ドロイド — Built for Android Security Research*
+*Shinodroid 忍ドロイド — Built for Android Security Research*

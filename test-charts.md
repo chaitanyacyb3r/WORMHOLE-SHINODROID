@@ -1,4 +1,4 @@
-# ShinobiDroid — Chart Color Test
+# Shinodroid — Chart Color Test
 
 > Testing Mermaid pie chart colors with the new vivid theme.
 

@@ -1,4 +1,4 @@
--- ── ShinobiDroid Phase 0 Migration: Engine Architecture Support ───────────
+-- ── Shinodroid Phase 0 Migration: Engine Architecture Support ───────────
 -- Adds columns needed by the modular engine architecture.
 -- Run this AFTER supabase-schema.sql and supabase-dynamic-migration.sql.
 

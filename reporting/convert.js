@@ -353,7 +353,7 @@ const html = `<!DOCTYPE html>
 <body>
 <div class="cover-page">
   <div class="cover-inner">
-    <div class="cover-logo">WORMHOLE // ShinobiDroid</div>
+    <div class="cover-logo">WORMHOLE // Shinodroid</div>
     <div class="cover-divider"></div>
     <div class="cover-title">Pitch Deck</div>
     <div class="cover-sub">Seed Round &nbsp;&bull;&nbsp; 2026</div>
@@ -651,7 +651,7 @@ const svgFix = () => {
     printBackground: true,
     margin: { top: "20mm", right: "18mm", bottom: "20mm", left: "18mm" },
     displayHeaderFooter: true,
-    headerTemplate: `<div style="font-size:9px;color:#6366f1;width:100%;display:flex;justify-content:space-between;padding:0 18mm;font-family:sans-serif;font-weight:600;letter-spacing:0.04em;"><span>WORMHOLE // ShinobiDroid</span><span style="color:#aaa;font-weight:400;">Pitch Deck 2026 &nbsp;|&nbsp; Confidential</span></div>`,
+    headerTemplate: `<div style="font-size:9px;color:#6366f1;width:100%;display:flex;justify-content:space-between;padding:0 18mm;font-family:sans-serif;font-weight:600;letter-spacing:0.04em;"><span>WORMHOLE // Shinodroid</span><span style="color:#aaa;font-weight:400;">Pitch Deck 2026 &nbsp;|&nbsp; Confidential</span></div>`,
     footerTemplate: `<div style="font-size:9px;color:#aaa;width:100%;text-align:center;font-family:sans-serif;">Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>`,
   });
 

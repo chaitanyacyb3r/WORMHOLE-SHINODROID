@@ -1,5 +1,5 @@
 /**
- * ShinobiDroid — MobSF Static Analysis Engine
+ * Shinodroid — MobSF Static Analysis Engine
  *
  * Wraps the existing MobSF integration (via watcher.mjs scanFile)
  * in the standard engine interface.

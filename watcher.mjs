@@ -1,5 +1,5 @@
 /**
- * WORMHOLE // ShinobiDroid 忍ドロイド — Automated Android Pentesting Pipeline
+ * WORMHOLE // Shinodroid 忍ドロイド — Automated Android Pentesting Pipeline
  *
  * Pipeline per APK:
  *   Upload → MobSF Static Scan → JSON+PDF Reports
@@ -577,7 +577,7 @@ async function main() {
     await mkdir(REPORTS_DIR, { recursive: true });
 
     log("info", `╔══════════════════════════════════════════════════════╗`);
-    log("info", `║  WORMHOLE // ShinobiDroid 忍ドロイド               ║`);
+    log("info", `║  WORMHOLE // Shinodroid 忍ドロイド               ║`);
     log("info", `╠══════════════════════════════════════════════════════╣`);
     log("info", `║  MobSF URL:  ${MOBSF_URL.padEnd(40)}║`);
     log("info", `║  Inbox:      ${APK_INBOX_DIR.padEnd(40).slice(0, 40)}║`);

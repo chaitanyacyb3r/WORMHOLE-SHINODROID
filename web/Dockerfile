@@ -1,14 +1,13 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# ShinobiDroid — Web Dashboard Dockerfile (Next.js Standalone)
+# Shinodroid — Web Dashboard Dockerfile (Next.js Standalone)
 #
 # Multi-stage build:
 #   1. deps    — install npm dependencies
 #   2. builder — build Next.js with standalone output
 #   3. runner  — minimal production image (non-root)
 #
-# Build args required:
-#   NEXT_PUBLIC_SUPABASE_URL — your Supabase project URL
-#   NEXT_PUBLIC_SUPABASE_ANON_KEY — your Supabase anon key
+# Build args required (passed via docker-compose.yml):
+#   NEXT_PUBLIC_CONVEX_URL — your Convex deployment URL
 #
 # Security:
 #   - Runs as non-root user (nextjs:nodejs)
@@ -30,10 +29,12 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build args: real Supabase values baked into JS at compile time
+# Build args: Convex URL baked into JS at compile time
+ARG NEXT_PUBLIC_CONVEX_URL
 ARG NEXT_PUBLIC_SUPABASE_URL
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_PUBLIC_CONVEX_URL=${NEXT_PUBLIC_CONVEX_URL}
 ENV NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
 RUN npm run build
@@ -65,5 +66,3 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 CMD ["node", "server.js"]
-
-

@@ -1,6 +1,6 @@
 // ================================================================
 // SHINOBI-NETWORK.js — Network Traffic Monitor
-// ShinobiDroid 忍ドロイド — MASVS-NETWORK (M3)
+// Shinodroid 忍ドロイド — MASVS-NETWORK (M3)
 //
 // Intercepts all HTTP/HTTPS connections, URL calls, DNS lookups,
 // and WebView URL loads. Complements SSL-BYE.js by monitoring

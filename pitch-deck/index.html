@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shinodroid — Investor Pitch Deck</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
+    rel="stylesheet">
+  <style>
+    *,
+    *::before,
+    *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box
+    }
+
+    :root {
+      --bg: #06060e;
+      --surface: rgba(15, 15, 30, 0.7);
+      --accent: #7c3aed;
+      --accent2: #a855f7;
+      --pink: #ec4899;
+      --green: #10b981;
+      --red: #ef4444;
+      --orange: #f97316;
+      --blue: #3b82f6;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --border: rgba(124, 58, 237, 0.15)
+    }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-snap-type: y mandatory
+    }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow-x: hidden
+    }
+
+    /* Slide system */
+    .slide {
+      min-height: 100vh;
+      scroll-snap-align: start;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 80px;
+      position: relative;
+      overflow: hidden
+    }
+
+    .slide-inner {
+      max-width: 1200px;
+      width: 100%;
+      z-index: 2;
+      position: relative
+    }
+
+    /* Ambient bg */
+    .slide::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 60% 50% at 20% 40%, rgba(124, 58, 237, 0.06), transparent), radial-gradient(ellipse 50% 40% at 80% 60%, rgba(236, 72, 153, 0.04), transparent);
+      pointer-events: none
+    }
+
+    /* Typography */
+    h1 {
+      font-size: clamp(2.5rem, 5vw, 4.5rem);
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      line-height: 1.05
+    }
+
+    h2 {
+      font-size: clamp(2rem, 3.5vw, 3rem);
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+      margin-bottom: 24px
+    }
+
+    h3 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin-bottom: 8px
+    }
+
+    p {
+      line-height: 1.7;
+      color: var(--muted)
+    }
+
+    .grad {
+      background: linear-gradient(135deg, var(--accent), var(--pink));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text
+    }
+
+    .tag {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 16px;
+      display: block
+    }
+
+    /* Glass card */
+    .glass {
+      background: var(--surface);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 32px
+    }
+
+    .glass:hover {
+      border-color: rgba(124, 58, 237, 0.3);
+      box-shadow: 0 0 30px rgba(124, 58, 237, 0.08)
+    }
+
+    /* Grid helpers */
+    .grid2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 28px
+    }
+
+    .grid3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 24px
+    }
+
+    .grid4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px
+    }
+
+    .flex-c {
+      display: flex;
+      align-items: center
+    }
+
+    .gap-sm {
+      gap: 12px
+    }
+
+    /* Stat */
+    .stat-value {
+      font-size: 3.5rem;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      line-height: 1
+    }
+
+    .stat-label {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-top: 6px;
+      font-weight: 500
+    }
+
+    /* Badge */
+    .badge {
+      display: inline-block;
+      padding: 4px 14px;
+      border-radius: 100px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.05em
+    }
+
+    .badge-accent {
+      background: rgba(124, 58, 237, 0.15);
+      color: var(--accent2)
+    }
+
+    /* Progress bar */
+    .bar-track {
+      height: 10px;
+      border-radius: 5px;
+      background: rgba(255, 255, 255, 0.05);
+      overflow: hidden;
+      margin-top: 8px
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 5px;
+      background: linear-gradient(90deg, var(--accent), var(--pink))
+    }
+
+    /* Timeline */
+    .timeline-item {
+      display: flex;
+      gap: 20px;
+      padding-bottom: 28px
+    }
+
+    .timeline-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      flex-shrink: 0;
+      margin-top: 4px;
+      box-shadow: 0 0 12px rgba(124, 58, 237, 0.4)
+    }
+
+    .timeline-line {
+      position: relative
+    }
+
+    .timeline-line::after {
+      content: '';
+      position: absolute;
+      left: 6px;
+      top: 18px;
+      width: 2px;
+      height: calc(100% - 6px);
+      background: rgba(124, 58, 237, 0.15)
+    }
+
+    .timeline-item:last-child .timeline-line::after {
+      display: none
+    }
+
+    /* Table */
+    .comp-table {
+      width: 100%;
+      border-collapse: collapse
+    }
+
+    .comp-table th,
+    .comp-table td {
+      text-align: left;
+      padding: 14px 18px;
+      font-size: 0.85rem
+    }
+
+    .comp-table th {
+      color: var(--muted);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em
+    }
+
+    .comp-table td {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03)
+    }
+
+    .check {
+      color: var(--green);
+      font-weight: 700
+    }
+
+    .cross {
+      color: rgba(255, 255, 255, 0.15)
+    }
+
+    /* Pricing card */
+    .price-card {
+      text-align: center
+    }
+
+    .price-card .price {
+      font-size: 2.5rem;
+      font-weight: 900;
+      margin: 16px 0 4px
+    }
+
+    .price-card .per {
+      font-size: 0.8rem;
+      color: var(--muted)
+    }
+
+    .price-card.featured {
+      border-color: var(--accent);
+      box-shadow: 0 0 40px rgba(124, 58, 237, 0.15)
+    }
+
+    .price-card.featured::before {
+      content: 'POPULAR';
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: linear-gradient(135deg, var(--accent), var(--pink));
+      color: white;
+      font-size: 0.65rem;
+      font-weight: 800;
+      padding: 4px 16px;
+      border-radius: 100px;
+      letter-spacing: 0.1em
+    }
+
+    /* CTA button */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 36px;
+      border-radius: 14px;
+      font-weight: 700;
+      font-size: 1rem;
+      text-decoration: none;
+      transition: all 0.3s ease;
+      border: none;
+      cursor: pointer
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), var(--pink));
+      color: white;
+      box-shadow: 0 0 30px rgba(124, 58, 237, 0.25)
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 0 50px rgba(124, 58, 237, 0.35)
+    }
+
+    /* Slide number */
+    .slide-num {
+      position: absolute;
+      bottom: 30px;
+      right: 40px;
+      font-size: 0.75rem;
+      color: rgba(255, 255, 255, 0.15);
+      font-weight: 700;
+      letter-spacing: 0.1em
+    }
+
+    /* Logo */
+    .logo {
+      font-size: 1.1rem;
+      font-weight: 800;
+      letter-spacing: -0.02em
+    }
+
+    .logo span {
+      color: var(--accent)
+    }
+
+    /* Animations */
+    @keyframes float {
+
+      0%,
+      100% {
+        transform: translateY(0)
+      }
+
+      50% {
+        transform: translateY(-12px)
+      }
+    }
+
+    @keyframes pulse-ring {
+
+      0%,
+      100% {
+        box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.3)
+      }
+
+      50% {
+        box-shadow: 0 0 0 20px rgba(124, 58, 237, 0)
+      }
+    }
+
+    /* Print-friendly */
+    @media print {
+      .slide {
+        min-height: auto;
+        page-break-after: always;
+        padding: 40px
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 1: TITLE
+     ═══════════════════════════════════════════════ -->
+  <section class="slide" style="background:radial-gradient(ellipse at 50% 50%,rgba(124,58,237,0.12),transparent 70%)">
+    <div class="slide-inner" style="text-align:center">
+      <div
+        style="width:80px;height:80px;display:flex;align-items:center;justify-content:center;margin:0 auto 32px;animation:float 4s ease-in-out infinite;">
+        <img
+          src="newPremium-corporate-logo-mark-for-a-venture-backed-cybersecurity-SaaS-company-A-single-bold-geometric--2026-04-06T14-08-54.png"
+          alt="Shinodroid"
+          style="width:100%;height:100%;object-fit:contain;border-radius:24px;box-shadow:0 0 40px rgba(124,58,237,0.3)">
+      </div>
+      <h1 style="margin-bottom:20px">
+        <span class="grad">Shinodroid</span>
+      </h1>
+      <p style="font-size:1.35rem;color:var(--text);font-weight:500;max-width:700px;margin:0 auto 12px">
+        AI-Powered Android Security Analysis Platform
+      </p>
+      <p style="font-size:1rem;max-width:600px;margin:0 auto 40px">
+        Automated vulnerability detection, dynamic instrumentation, and intelligent remediation — powered by <strong
+          style="color:var(--accent2)">Proprietary AI Engine</strong>.
+      </p>
+      <div style="display:flex;gap:20px;justify-content:center;flex-wrap:wrap">
+        <span class="badge badge-accent">🔒 50+ Security Checks</span>
+        <span class="badge badge-accent">🧠 AI Triage Engine</span>
+        <span class="badge badge-accent">⚡ Static + Dynamic</span>
+        <span class="badge badge-accent">📊 OWASP MASVS Mapped</span>
+      </div>
+      <p style="margin-top:48px;font-size:0.8rem;color:rgba(255,255,255,0.25)">CONFIDENTIAL — 2026</p>
+    </div>
+    <span class="slide-num">01 / 14</span>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 2: THE PROBLEM
+     ═══════════════════════════════════════════════ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <span class="tag">The Problem</span>
+      <h2>Mobile Apps Are Shipping <span class="grad">Dangerously Insecure</span></h2>
+      <p style="max-width:700px;margin-bottom:40px;font-size:1.05rem">
+        82% of Android apps built with AI coding assistants contain at least one critical vulnerability. Most teams
+        don't discover these until after a breach.
+      </p>
+      <div class="grid3">
+        <div class="glass">
+          <div
+            style="width:44px;height:44px;border-radius:12px;background:rgba(239,68,68,0.12);display:flex;align-items:center;justify-content:center;margin-bottom:16px">
+            <span style="font-size:1.2rem">🔑</span>
+          </div>
+          <h3 style="color:#f87171">Hardcoded Secrets</h3>
+          <p style="font-size:0.85rem">API keys, tokens, and credentials embedded directly in source code — exposed to
+            anyone who decompiles the APK.</p>
+          <span class="badge" style="background:rgba(239,68,68,0.12);color:#ef4444;margin-top:16px">CRITICAL</span>
+        </div>
+        <div class="glass">
+          <div
+            style="width:44px;height:44px;border-radius:12px;background:rgba(249,115,22,0.12);display:flex;align-items:center;justify-content:center;margin-bottom:16px">
+            <span style="font-size:1.2rem">📱</span>
+          </div>
+          <h3 style="color:#fb923c">Insecure Storage</h3>
+          <p style="font-size:0.85rem">Sensitive user data in plaintext SharedPreferences or SQLite databases,
+            accessible to any app on the device.</p>
+          <span class="badge" style="background:rgba(249,115,22,0.12);color:#f97316;margin-top:16px">HIGH</span>
+        </div>
+        <div class="glass">
+          <div
+            style="width:44px;height:44px;border-radius:12px;background:rgba(124,58,237,0.12);display:flex;align-items:center;justify-content:center;margin-bottom:16px">
+            <span style="font-size:1.2rem">🔓</span>
+          </div>
+          <h3 style="color:#a78bfa">Missing Encryption</h3>
+          <p style="font-size:0.85rem">Network calls without SSL pinning or certificate validation — vulnerable to
+            man-in-the-middle attacks.</p>
+          <span class="badge" style="background:rgba(124,58,237,0.12);color:var(--accent2);margin-top:16px">HIGH</span>
+        </div>
+      </div>
+    </div>
+    <span class="slide-num">02 / 14</span>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 3: MARKET OPPORTUNITY
+     ═══════════════════════════════════════════════ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <span class="tag">Market Opportunity</span>
+      <h2>A <span class="grad">₹1.05 Lakh Cr</span> Market Growing 24% YoY</h2>
+      <p style="max-width:700px;margin-bottom:40px">
+        The global mobile application security market was ₹22,970 Cr in 2023 and is projected to reach ₹1,05,000 Cr by
+        2030 at a
+        24.2% CAGR. Android powers 3.9 billion active users worldwide. <span
+          style="font-size:0.7rem;color:rgba(255,255,255,0.25)">(Grand View Research, 2024 · BankMyCell, 2025)</span>
+      </p>
+      <div class="grid4">
+        <div class="glass" style="text-align:center">
+          <div class="stat-value grad">3.9B</div>
+          <div class="stat-label">Active Android Users</div>
+        </div>
+        <div class="glass" style="text-align:center">
+          <div class="stat-value grad">75%</div>
+          <div class="stat-label">Apps with ≥1 Vulnerability</div>
+        </div>
+        <div class="glass" style="text-align:center">
+          <div class="stat-value grad">₹45Cr</div>
+          <div class="stat-label">Avg. Data Breach Cost (IBM '24)</div>
+        </div>
+        <div class="glass" style="text-align:center">
+          <div class="stat-value grad">24.2%</div>
+          <div class="stat-label">Market CAGR ('24–'30)</div>
+        </div>
+      </div>
+      <div class="glass" style="margin-top:28px">
+        <div class="flex-c" style="justify-content:space-between;margin-bottom:12px">
+          <span style="font-weight:600;font-size:0.9rem">Market Size by 2030 (Grand View Research)</span>
+          <span style="font-weight:800;color:var(--accent2)">₹22,970 Cr (2023) → ₹1,05,000 Cr (2030)</span>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width:30%"></div>
+        </div>
+      </div>
+    </div>
+    <span class="slide-num">03 / 14</span>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 4: THE SOLUTION
+     ═══════════════════════════════════════════════ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <span class="tag">Our Solution</span>
+      <h2>Upload. Analyze. <span class="grad">Ship Secure.</span></h2>
+      <p style="max-width:700px;margin-bottom:40px">
+        Shinodroid is a fully automated Android security analysis platform that combines 6 specialized engines with
+        AI-powered triage to deliver actionable, developer-friendly reports in under 10 minutes.
+      </p>
+      <div class="grid3">
+        <div class="glass" style="text-align:center;padding:40px 28px">
+          <div style="font-size:2.5rem;margin-bottom:16px">📤</div>
+          <div style="font-size:3rem;font-weight:900;color:var(--accent2);margin-bottom:8px">01</div>
+          <h3>Upload APK</h3>
+          <p style="font-size:0.85rem">Drag & drop your Android package. Encrypted upload, sandboxed processing.</p>
+        </div>
+        <div class="glass"
+          style="text-align:center;padding:40px 28px;border-color:var(--accent);box-shadow:0 0 30px rgba(124,58,237,0.1)">
+          <div style="font-size:2.5rem;margin-bottom:16px">🔬</div>
+          <div style="font-size:3rem;font-weight:900;color:var(--accent2);margin-bottom:8px">02</div>
+          <h3>Deep Analysis</h3>
+          <p style="font-size:0.85rem">6 engines scan in parallel — static, dynamic, behavioral, database, logcat, and
+            AI triage.</p>
+        </div>
+        <div class="glass" style="text-align:center;padding:40px 28px">
+          <div style="font-size:2.5rem;margin-bottom:16px">📋</div>
+          <div style="font-size:3rem;font-weight:900;color:var(--accent2);margin-bottom:8px">03</div>
+          <h3>AI Report</h3>
+          <p style="font-size:0.85rem">Our proprietary AI engine generates prioritized remediation with exploit
+            scenarios and code
+            fixes.</p>
+        </div>
+      </div>
+    </div>
+    <span class="slide-num">04 / 14</span>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 5: TECHNOLOGY — ENGINE ARCHITECTURE
+     ═══════════════════════════════════════════════ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <span class="tag">Technology</span>
+      <h2>6-Engine <span class="grad">Security Pipeline</span></h2>
+      <p style="max-width:700px;margin-bottom:40px">
+        Every APK passes through our multi-engine pipeline. Each engine specializes in a different attack surface,
+        feeding findings into the AI triage layer for intelligent prioritization.
+      </p>
+      <div class="grid2">
+        <div>
+          <div class="glass" style="margin-bottom:20px">
+            <div class="flex-c gap-sm" style="margin-bottom:12px">
+              <div
+                style="width:36px;height:36px;border-radius:10px;background:rgba(59,130,246,0.15);display:flex;align-items:center;justify-content:center">
+                <span style="color:var(--blue)">🔍</span>
+              </div>
+              <h3 style="margin:0">Deep Static Analysis</h3>
+            </div>
+            <p style="font-size:0.82rem">Manifest analysis, component exposure, hardcoded secrets, cryptographic misuse,
+              code quality.</p>
+          </div>
+          <div class="glass" style="margin-bottom:20px">
+            <div class="flex-c gap-sm" style="margin-bottom:12px">
+              <div
+                style="width:36px;height:36px;border-radius:10px;background:rgba(245,158,11,0.15);display:flex;align-items:center;justify-content:center">
+                <span style="color:#f59e0b">⚡</span>
+              </div>
+              <h3 style="margin:0">Behavioral Analysis</h3>
+            </div>
+            <p style="font-size:0.82rem">12 categories of malicious behavior patterns: telephony, SMS, GPS, device
+              settings abuse.</p>
+          </div>
+          <div class="glass">
+            <div class="flex-c gap-sm" style="margin-bottom:12px">
+              <div
+                style="width:36px;height:36px;border-radius:10px;background:rgba(249,115,22,0.15);display:flex;align-items:center;justify-content:center">
+                <span style="color:var(--orange)">🔥</span>
+              </div>
+              <h3 style="margin:0">Database Misconfiguration</h3>
+            </div>
+            <p style="font-size:0.82rem">Open databases, exposed cloud storage buckets, API key leaks, insecure database
+              rules.</p>
+          </div>
+        </div>
+        <div>
+          <div class="glass" style="margin-bottom:20px">
+            <div class="flex-c gap-sm" style="margin-bottom:12px">
+              <div
+                style="width:36px;height:36px;border-radius:10px;background:rgba(124,58,237,0.15);display:flex;align-items:center;justify-content:center">
+                <span style="color:var(--accent2)">🛡️</span>
+              </div>
+              <h3 style="margin:0">Dynamic Instrumentation</h3>
+            </div>
+            <p style="font-size:0.82rem">Runtime SSL pinning bypass, root detection evasion, hook-based API monitoring
+              on Android emulator.</p>
+          </div>
+          <div class="glass" style="margin-bottom:20px">
+            <div class="flex-c gap-sm" style="margin-bottom:12px">
+              <div
+                style="width:36px;height:36px;border-radius:10px;background:rgba(16,185,129,0.15);display:flex;align-items:center;justify-content:center">
+                <span style="color:var(--green)">📋</span>
+              </div>
+              <h3 style="margin:0">Logcat Leak Detection</h3>
+            </div>
+            <p style="font-size:0.82rem">Passwords, tokens, PII accidentally logged to system output during runtime
+              execution.</p>
+          </div>
+          <div class="glass" style="border-color:var(--accent);box-shadow:0 0 20px rgba(124,58,237,0.1)">
+            <div class="flex-c gap-sm" style="margin-bottom:12px">
+              <div
+                style="width:36px;height:36px;border-radius:10px;background:rgba(236,72,153,0.15);display:flex;align-items:center;justify-content:center">
+                <span style="color:var(--pink)">🧠</span>
+              </div>
+              <h3 style="margin:0;color:var(--accent2)">AI Triage — Proprietary Engine</h3>
+            </div>
+            <p style="font-size:0.82rem">Final-stage intelligence: executive summary, attack trees, OWASP mapping, Gantt
+              remediation roadmap.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <span class="slide-num">05 / 14</span>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 6: AI ENGINE DEEP DIVE
+     ═══════════════════════════════════════════════ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <span class="tag">AI Core</span>
+      <h2>Powered by <span class="grad">Proprietary AI Engine</span></h2>
+      <p style="max-width:700px;margin-bottom:40px">
+        Our AI triage engine runs as the final stage of the pipeline, synthesizing all findings into an actionable,
+        documentation-grade security report with visual dashboards.
+      </p>
+      <div class="grid2">
+        <div class="glass">
+          <h3 style="color:var(--accent2);margin-bottom:20px">AI Report Outputs</h3>
+          <div style="display:flex;flex-direction:column;gap:14px">
+            <div class="flex-c gap-sm"><span style="color:var(--green)">✓</span><span
+                style="font-size:0.85rem">Executive summary with risk matrix</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green)">✓</span><span style="font-size:0.85rem">Mermaid
+                severity pie & category breakdown</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green)">✓</span><span
+                style="font-size:0.85rem">Per-finding exploit scenario analysis</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green)">✓</span><span style="font-size:0.85rem">Attack
+                tree & kill chain diagrams</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green)">✓</span><span style="font-size:0.85rem">OWASP
+                MASVS compliance mapping</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green)">✓</span><span
+                style="font-size:0.85rem">Prioritized remediation Gantt chart</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green)">✓</span><span
+                style="font-size:0.85rem">Code-level fix suggestions</span></div>
+          </div>
+        </div>
+        <div class="glass"
+          style="background:linear-gradient(135deg,rgba(124,58,237,0.08),rgba(236,72,153,0.04));border-color:rgba(124,58,237,0.25)">
+          <h3 style="color:var(--accent2);margin-bottom:20px">Why Our AI Engine?</h3>
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <div>
+              <div class="flex-c" style="justify-content:space-between;margin-bottom:4px">
+                <span style="font-size:0.85rem;font-weight:600">SWE-Pro Benchmark</span>
+                <span style="font-size:0.85rem;font-weight:800;color:var(--green)">56.22%</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-fill" style="width:56%"></div>
+              </div>
+            </div>
+            <div>
+              <div class="flex-c" style="justify-content:space-between;margin-bottom:4px">
+                <span style="font-size:0.85rem;font-weight:600">TerminalBench 2</span>
+                <span style="font-size:0.85rem;font-weight:800;color:var(--green)">57.0%</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-fill" style="width:57%"></div>
+              </div>
+            </div>
+            <div>
+              <div class="flex-c" style="justify-content:space-between;margin-bottom:4px">
+                <span style="font-size:0.85rem;font-weight:600">Skill Adherence (40+ skills)</span>
+                <span style="font-size:0.85rem;font-weight:800;color:var(--green)">97%</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-fill" style="width:97%"></div>
+              </div>
+            </div>
+            <div>
+              <div class="flex-c" style="justify-content:space-between;margin-bottom:4px">
+                <span style="font-size:0.85rem;font-weight:600">Context Window</span>
+                <span style="font-size:0.85rem;font-weight:800;color:var(--accent2)">204,800 tokens</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-fill" style="width:82%"></div>
+              </div>
+            </div>
+          </div>
+          <p style="font-size:0.75rem;margin-top:20px;color:rgba(255,255,255,0.3)">Industry-leading cost efficiency —
+            &lt;⅓ of competing models at comparable quality</p>
+        </div>
+      </div>
+    </div>
+    <span class="slide-num">06 / 14</span>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 7: COMPETITIVE LANDSCAPE
+     ═══════════════════════════════════════════════ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <span class="tag">Competitive Landscape</span>
+      <h2><span class="grad">Shinodroid</span> vs. The Market</h2>
+      <div class="glass" style="overflow:hidden;padding:0;margin-top:32px">
+        <table class="comp-table">
+          <thead>
+            <tr>
+              <th>Capability</th>
+              <th>Shinodroid</th>
+              <th>Open-Source Tools</th>
+              <th>Veracode</th>
+              <th>NowSecure</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Static Analysis</td>
+              <td class="check">✓</td>
+              <td class="check">✓</td>
+              <td class="check">✓</td>
+              <td class="check">✓</td>
+            </tr>
+            <tr>
+              <td>On-Device Frida Instrumentation</td>
+              <td class="check">✓ Automated</td>
+              <td class="check">✓ (manual)</td>
+              <td style="color:var(--muted)">Cloud sandbox</td>
+              <td class="check">✓</td>
+            </tr>
+            <tr>
+              <td>AI-Native Report Generation</td>
+              <td class="check">✓ AI</td>
+              <td class="cross">✗</td>
+              <td class="cross">✗</td>
+              <td style="color:var(--muted)">Policy-based</td>
+            </tr>
+            <tr>
+              <td>Dedicated Database Audit Engine</td>
+              <td class="check">✓ Deep scan</td>
+              <td class="cross">✗</td>
+              <td class="cross">✗</td>
+              <td style="color:var(--muted)">Via traffic</td>
+            </tr>
+            <tr>
+              <td>Behavioral Pattern Analysis</td>
+              <td class="check">✓ Built-in</td>
+              <td class="cross">✗</td>
+              <td class="check">✓</td>
+              <td class="check">✓</td>
+            </tr>
+            <tr>
+              <td>OWASP MASVS Mapping</td>
+              <td class="check">✓ Auto</td>
+              <td class="cross">Manual</td>
+              <td class="check">✓</td>
+              <td class="check">✓</td>
+            </tr>
+            <tr>
+              <td>CI/CD API</td>
+              <td class="check">✓</td>
+              <td class="cross">✗</td>
+              <td class="check">✓</td>
+              <td class="check">✓</td>
+            </tr>
+            <tr>
+              <td>Time to First Scan</td>
+              <td style="color:var(--green);font-weight:600">0 min (SaaS)</td>
+              <td>Self-hosted</td>
+              <td>Weeks</td>
+              <td>Days</td>
+            </tr>
+            <tr>
+              <td style="border:none">Starting Price</td>
+              <td style="color:var(--green);font-weight:700;border:none">Free</td>
+              <td style="border:none">Free (DIY)</td>
+              <td style="border:none">Enterprise</td>
+              <td style="border:none">Enterprise</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="text-align:center;margin-top:20px;font-size:0.85rem">
+        <strong style="color:var(--accent2)">Key differentiator:</strong> Only platform combining 6 specialized engines
+        with AI-native report generation in a zero-setup SaaS — at &lt;⅓ the compute cost.
+      </p>
+    </div>
+    <span class="slide-num">07 / 14</span>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 8: PRODUCT DEMO (Screenshots)
+     ═══════════════════════════════════════════════ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <span class="tag">Product</span>
+      <h2>Premium <span class="grad">3D Dashboard</span> Experience</h2>
+      <p style="max-width:700px;margin-bottom:40px">
+        A stunning, glassmorphic interface with modern frameworks and WebGL rendering — designed to make security
+        analysis feel premium and intuitive.
+      </p>
+      <div class="grid3">
+        <div class="glass" style="padding:20px;text-align:center">
+          <div
+            style="height:180px;border-radius:12px;background:linear-gradient(135deg,rgba(124,58,237,0.15),rgba(236,72,153,0.08));display:flex;align-items:center;justify-content:center;margin-bottom:16px">
+            <span style="font-size:3.5rem">🎯</span>
+          </div>
+          <h3>3D Tilt Stat Cards</h3>
+          <p style="font-size:0.8rem">Interactive perspective-shifting metrics with animated counters</p>
+        </div>
+        <div class="glass" style="padding:20px;text-align:center">
+          <div
+            style="height:180px;border-radius:12px;background:linear-gradient(135deg,rgba(16,185,129,0.12),rgba(59,130,246,0.08));display:flex;align-items:center;justify-content:center;margin-bottom:16px">
+            <span style="font-size:3.5rem">📊</span>
+          </div>
+          <h3>Animated Visualizations</h3>
+          <p style="font-size:0.8rem">SVG score rings, donut charts, and bar graphs with spring physics</p>
+        </div>
+        <div class="glass" style="padding:20px;text-align:center">
+          <div
+            style="height:180px;border-radius:12px;background:linear-gradient(135deg,rgba(245,158,11,0.12),rgba(239,68,68,0.08));display:flex;align-items:center;justify-content:center;margin-bottom:16px">
+            <span style="font-size:3.5rem">🌌</span>
+          </div>
+          <h3>Starfield Background</h3>
+          <p style="font-size:0.8rem">WebGL particle system with frosted-glass UI layered on top</p>
+        </div>
+      </div>
+      <div class="glass" style="margin-top:24px;text-align:center;padding:16px">
+        <p style="font-size:0.85rem;color:var(--text);font-weight:500">
+          Built with <span style="color:var(--accent2)">Modern Frameworks</span> · <span
+            style="color:var(--accent2)">WebGL
+            Rendering</span> · <span style="color:var(--accent2)">Real-time Backend</span> · <span
+            style="color:var(--accent2)">Proprietary AI</span>
+        </p>
+      </div>
+    </div>
+    <span class="slide-num">08 / 14</span>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 9: BUSINESS MODEL
+     ═══════════════════════════════════════════════ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <span class="tag">Business Model</span>
+      <h2>SaaS Revenue with <span class="grad">3 Tiers</span></h2>
+      <p style="max-width:700px;margin-bottom:40px">
+        Freemium acquisition → Pro conversion → Enterprise upsell. Designed for developer-led growth.
+      </p>
+      <div class="grid3">
+        <div class="glass price-card">
+          <h3 style="color:var(--muted)">Hobby</h3>
+          <div class="price" style="color:var(--text)">Free</div>
+          <div class="per">forever</div>
+          <div style="margin-top:20px;text-align:left;display:flex;flex-direction:column;gap:10px">
+            <div class="flex-c gap-sm"><span style="color:var(--green);font-size:0.8rem">✓</span><span
+                style="font-size:0.82rem">3 scans / month</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green);font-size:0.8rem">✓</span><span
+                style="font-size:0.82rem">Static analysis</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green);font-size:0.8rem">✓</span><span
+                style="font-size:0.82rem">Basic report</span></div>
+            <div class="flex-c gap-sm"><span class="cross" style="font-size:0.8rem">✗</span><span
+                style="font-size:0.82rem;color:var(--muted)">Dynamic analysis</span></div>
+            <div class="flex-c gap-sm"><span class="cross" style="font-size:0.8rem">✗</span><span
+                style="font-size:0.82rem;color:var(--muted)">AI reports</span></div>
+          </div>
+        </div>
+        <div class="glass price-card featured" style="position:relative">
+          <h3 style="color:var(--accent2)">Professional</h3>
+          <div class="price grad">₹2,499</div>
+          <div class="per">/ month (₹1,999 annual)</div>
+          <div style="margin-top:20px;text-align:left;display:flex;flex-direction:column;gap:10px">
+            <div class="flex-c gap-sm"><span style="color:var(--green);font-size:0.8rem">✓</span><span
+                style="font-size:0.82rem">Unlimited scans</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green);font-size:0.8rem">✓</span><span
+                style="font-size:0.82rem">Static + Dynamic</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green);font-size:0.8rem">✓</span><span
+                style="font-size:0.82rem">AI-powered reports</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green);font-size:0.8rem">✓</span><span
+                style="font-size:0.82rem">CI/CD API access</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green);font-size:0.8rem">✓</span><span
+                style="font-size:0.82rem">Team sharing</span></div>
+          </div>
+        </div>
+        <div class="glass price-card">
+          <h3 style="color:var(--muted)">Enterprise</h3>
+          <div class="price" style="color:var(--text)">₹8,499</div>
+          <div class="per">/ month (₹6,999 annual)</div>
+          <div style="margin-top:20px;text-align:left;display:flex;flex-direction:column;gap:10px">
+            <div class="flex-c gap-sm"><span style="color:var(--green);font-size:0.8rem">✓</span><span
+                style="font-size:0.82rem">Everything in Pro</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green);font-size:0.8rem">✓</span><span
+                style="font-size:0.82rem">SSO / SAML</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green);font-size:0.8rem">✓</span><span
+                style="font-size:0.82rem">SLA guarantee</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green);font-size:0.8rem">✓</span><span
+                style="font-size:0.82rem">Custom integrations</span></div>
+            <div class="flex-c gap-sm"><span style="color:var(--green);font-size:0.8rem">✓</span><span
+                style="font-size:0.82rem">On-premise option</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <span class="slide-num">09 / 14</span>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 10: GO-TO-MARKET
+     ═══════════════════════════════════════════════ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <span class="tag">Go-To-Market Strategy</span>
+      <h2>Developer-Led <span class="grad">Growth Engine</span></h2>
+      <div class="grid2" style="margin-top:36px">
+        <div>
+          <div class="glass" style="margin-bottom:20px">
+            <h3>🚀 Phase 1: Community (Q2 2026)</h3>
+            <p style="font-size:0.85rem">Free tier acquisition via developer communities (HackerOne, r/netsec,
+              r/androiddev), security conferences, and open-source integrations. Target: 12,000 free signups.</p>
+          </div>
+          <div class="glass" style="margin-bottom:20px">
+            <h3>📈 Phase 2: Conversion (Q3 2026)</h3>
+            <p style="font-size:0.85rem">In-product upgrade prompts, usage-based limits, and AI report previews to drive
+              Pro conversions. Target: 2–5% conversion rate (B2B SaaS benchmark, OpenView Partners).</p>
+          </div>
+          <div class="glass">
+            <h3>🏢 Phase 3: Team & Enterprise (Q1 2027)</h3>
+            <p style="font-size:0.85rem">Self-serve Team tier adoption within engineering orgs + direct sales to
+              security-conscious enterprises. Target: 50 Team accounts + 10 Enterprise contracts.</p>
+          </div>
+        </div>
+        <div class="glass" style="display:flex;flex-direction:column;justify-content:center">
+          <h3 style="margin-bottom:24px;color:var(--accent2)">Revenue Projections</h3>
+          <div style="display:flex;flex-direction:column;gap:20px">
+            <div>
+              <div class="flex-c" style="justify-content:space-between;margin-bottom:4px">
+                <span style="font-size:0.85rem;font-weight:600">Year 1 ARR</span>
+                <span style="font-weight:800;color:var(--accent2)">₹1.4 Cr</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-fill" style="width:10%"></div>
+              </div>
+            </div>
+            <div>
+              <div class="flex-c" style="justify-content:space-between;margin-bottom:4px">
+                <span style="font-size:0.85rem;font-weight:600">Year 2 ARR</span>
+                <span style="font-weight:800;color:var(--accent2)">₹4.6 Cr</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-fill" style="width:33%"></div>
+              </div>
+            </div>
+            <div>
+              <div class="flex-c" style="justify-content:space-between;margin-bottom:4px">
+                <span style="font-size:0.85rem;font-weight:600">Year 3 ARR</span>
+                <span style="font-weight:800;color:var(--green)">₹13 Cr</span>
+              </div>
+              <div class="bar-track">
+                <div class="bar-fill" style="width:93%"></div>
+              </div>
+            </div>
+          </div>
+          <div
+            style="margin-top:24px;padding:16px;border-radius:12px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.15)">
+            <p style="font-size:0.82rem;color:var(--green);font-weight:600;margin:0">
+              💰 LTV:CAC Target: 4:1 by Year 3 · AI-SaaS Gross Margin: 65–75%
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <span class="slide-num">10 / 14</span>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 11: TRACTION
+     ═══════════════════════════════════════════════ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <span class="tag">Traction & Milestones</span>
+      <h2>What We've <span class="grad">Built So Far</span></h2>
+      <div class="grid2" style="margin-top:36px">
+        <div>
+          <div class="timeline-item">
+            <div class="timeline-line">
+              <div class="timeline-dot"></div>
+            </div>
+            <div>
+              <h3>Full Product Built ✓</h3>
+              <p style="font-size:0.85rem">End-to-end platform operational: upload → 6-engine scan → AI report → PDF
+                export. Premium 3D dashboard deployed.</p>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <div class="timeline-line">
+              <div class="timeline-dot"></div>
+            </div>
+            <div>
+              <h3>AI Engine v2.7 Deployed ✓</h3>
+              <p style="font-size:0.85rem">Successfully upgraded to our latest proprietary AI model — 23% improvement in
+                code reasoning and remediation quality.</p>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <div class="timeline-line">
+              <div class="timeline-dot"></div>
+            </div>
+            <div>
+              <h3>Security Hardened ✓</h3>
+              <p style="font-size:0.85rem">Rate limiting, DoS prevention, error sanitization, sandbox isolation, and
+                input validation all implemented.</p>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <div class="timeline-line">
+              <div class="timeline-dot" style="background:var(--pink)"></div>
+            </div>
+            <div>
+              <h3 style="color:var(--pink)">Seeking Seed Round →</h3>
+              <p style="font-size:0.85rem">Ready for market launch, customer acquisition, and team expansion.</p>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="grid2" style="gap:16px">
+            <div class="glass" style="text-align:center;padding:24px">
+              <div class="stat-value" style="font-size:2.5rem;color:var(--green)">6</div>
+              <div class="stat-label">Analysis Engines</div>
+            </div>
+            <div class="glass" style="text-align:center;padding:24px">
+              <div class="stat-value" style="font-size:2.5rem;color:var(--accent2)">50+</div>
+              <div class="stat-label">Security Checks</div>
+            </div>
+            <div class="glass" style="text-align:center;padding:24px">
+              <div class="stat-value" style="font-size:2.5rem;color:var(--blue)">&lt;10m</div>
+              <div class="stat-label">Full Scan Time</div>
+            </div>
+            <div class="glass" style="text-align:center;padding:24px">
+              <div class="stat-value" style="font-size:2.5rem;color:var(--pink)">0</div>
+              <div class="stat-label">Setup Required</div>
+            </div>
+          </div>
+          <div class="glass" style="margin-top:16px;text-align:center">
+            <h3 style="color:var(--accent2)">Tech Stack</h3>
+            <p style="font-size:0.82rem;margin-top:8px">
+              Modern Full-Stack · Real-time Backend · WebGL · Proprietary AI
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <span class="slide-num">11 / 14</span>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 12: TEAM
+     ═══════════════════════════════════════════════ -->
+  <section class="slide">
+    <div class="slide-inner" style="text-align:center">
+      <span class="tag">The Team</span>
+      <h2>Built by <span class="grad">Security Engineers</span></h2>
+      <p style="max-width:600px;margin:0 auto 40px">
+        Our team combines deep mobile security expertise with modern full-stack engineering to build the platform the
+        industry needs.
+      </p>
+      <div style="max-width:400px;margin:0 auto">
+        <div class="glass" style="text-align:center">
+          <div
+            style="width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--pink));display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:2rem">
+            👨‍💻
+          </div>
+          <h3>Team Wormhole</h3>
+          <p style="font-size:0.85rem;color:var(--accent2);margin-bottom:8px">Full-Stack Security Engineers</p>
+          <p style="font-size:0.82rem">Built the entire platform end-to-end: 6-engine pipeline, AI triage system,
+            premium 3D dashboard, and security hardening.</p>
+          <div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+            <span class="badge badge-accent">Android Security</span>
+            <span class="badge badge-accent">AI/ML</span>
+            <span class="badge badge-accent">Full-Stack</span>
+            <span class="badge badge-accent">DevSecOps</span>
+          </div>
+        </div>
+      </div>
+      <div class="glass" style="margin-top:28px;max-width:600px;margin-left:auto;margin-right:auto">
+        <h3 style="color:var(--accent2)">Hiring Plan (Post-Funding)</h3>
+        <div style="display:flex;gap:24px;justify-content:center;margin-top:12px;flex-wrap:wrap">
+          <span style="font-size:0.82rem">🔬 Security Researcher</span>
+          <span style="font-size:0.82rem">🎨 Product Designer</span>
+          <span style="font-size:0.82rem">📈 Growth Lead</span>
+          <span style="font-size:0.82rem">🛠️ Backend Engineer</span>
+        </div>
+      </div>
+    </div>
+    <span class="slide-num">12 / 14</span>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 13: THE ASK
+     ═══════════════════════════════════════════════ -->
+  <section class="slide" style="background:radial-gradient(ellipse at 50% 50%,rgba(124,58,237,0.1),transparent 70%)">
+    <div class="slide-inner">
+      <span class="tag">The Ask</span>
+      <h2>Raising <span class="grad">₹18.6 Cr Seed</span></h2>
+      <p style="max-width:700px;margin-bottom:40px">
+        To accelerate market launch, build the team, and capture the developer security market.
+      </p>
+      <div class="grid3">
+        <div class="glass" style="text-align:center">
+          <div style="font-size:2.5rem;margin-bottom:12px">🧑‍💻</div>
+          <div class="stat-value" style="font-size:2rem">40%</div>
+          <div class="stat-label" style="margin-bottom:12px">Engineering & AI</div>
+          <p style="font-size:0.8rem">Hire 4 engineers (2 backend, 1 security researcher, 1 growth). Expand engine
+            coverage (iOS, Flutter). Fine-tune AI on security corpus.</p>
+        </div>
+        <div class="glass" style="text-align:center">
+          <div style="font-size:2.5rem;margin-bottom:12px">📣</div>
+          <div class="stat-value" style="font-size:2rem">35%</div>
+          <div class="stat-label" style="margin-bottom:12px">Go-To-Market</div>
+          <p style="font-size:0.8rem">Developer advocacy, content marketing, security conference presence, freemium
+            acquisition.</p>
+        </div>
+        <div class="glass" style="text-align:center">
+          <div style="font-size:2.5rem;margin-bottom:12px">⚙️</div>
+          <div class="stat-value" style="font-size:2rem">25%</div>
+          <div class="stat-label" style="margin-bottom:12px">Infrastructure</div>
+          <p style="font-size:0.8rem">Cloud compute for dynamic analysis emulators, AI inference, SOC 2 compliance
+            certification.</p>
+        </div>
+      </div>
+      <div class="glass" style="margin-top:28px;text-align:center;padding:24px;border-color:var(--accent)">
+        <p style="font-size:1.1rem;color:var(--text);font-weight:600;margin:0">
+          Target: <span class="grad" style="font-size:1.3rem;font-weight:900">₹14 Cr ARR</span> by Year 3 · <span
+            style="color:var(--green)">4:1 LTV:CAC</span> · <span style="color:var(--accent2)">65–75% Gross
+            Margin</span>
+        </p>
+      </div>
+    </div>
+    <span class="slide-num">13 / 14</span>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════
+     SLIDE 14: CLOSING
+     ═══════════════════════════════════════════════ -->
+  <section class="slide" style="background:radial-gradient(ellipse at 50% 50%,rgba(124,58,237,0.15),transparent 60%)">
+    <div class="slide-inner" style="text-align:center">
+      <div
+        style="width:80px;height:80px;display:flex;align-items:center;justify-content:center;margin:0 auto 32px;animation:pulse-ring 3s ease-in-out infinite">
+        <img
+          src="newPremium-corporate-logo-mark-for-a-venture-backed-cybersecurity-SaaS-company-A-single-bold-geometric--2026-04-06T14-08-54.png"
+          alt="Shinodroid" style="width:100%;height:100%;object-fit:contain;border-radius:24px;">
+      </div>
+      <h1 style="margin-bottom:20px">
+        Let's Secure the <span class="grad">Mobile Future</span>
+      </h1>
+      <p style="font-size:1.2rem;color:var(--text);max-width:600px;margin:0 auto 40px;font-weight:400">
+        Every Android app deserves a security audit.<br>Shinodroid makes it instant, intelligent, and beautiful.
+      </p>
+      <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-bottom:48px">
+        <a href="mailto:wormholesecurity@gmail.com" class="btn btn-primary">Contact Us →</a>
+      </div>
+      <div style="display:flex;gap:32px;justify-content:center;flex-wrap:wrap">
+        <div style="text-align:center">
+          <p style="font-size:0.8rem;color:var(--muted)">Email</p>
+          <p style="font-size:0.9rem;font-weight:600">wormholesecurity@gmail.com</p>
+        </div>
+        <div style="text-align:center">
+          <p style="font-size:0.8rem;color:var(--muted)">AI Engine</p>
+          <p style="font-size:0.9rem;font-weight:600;color:var(--accent2)">Proprietary AI Engine</p>
+        </div>
+      </div>
+      <p style="margin-top:48px;font-size:0.7rem;color:rgba(255,255,255,0.2)">
+        © 2026 WORMHOLE Security · Confidential
+      </p>
+    </div>
+    <span class="slide-num">14 / 14</span>
+  </section>
+
+</body>
+
+</html>

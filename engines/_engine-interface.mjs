@@ -1,5 +1,5 @@
 /**
- * ShinobiDroid Engine Interface — Standard Contract
+ * Shinodroid Engine Interface — Standard Contract
  * 
  * Every engine file (*.engine.mjs) MUST export a default object matching this interface.
  * The orchestrator auto-discovers engines by scanning the engines/ directory.

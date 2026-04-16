@@ -1,5 +1,5 @@
 /**
- * ShinobiDroid 忍ドロイド — Dynamic Analysis PDF Report Generator
+ * Shinodroid 忍ドロイド — Dynamic Analysis PDF Report Generator
  *
  * Takes the Frida results JSON and produces a professionally styled PDF
  * with script outputs, findings summary, and OWASP-aligned recommendations.
@@ -123,7 +123,7 @@ export async function generateDynamicPdf(fridaResults, dynamicFindings, scanMeta
         doc.moveDown(6);
         doc.fontSize(12).fillColor(COLORS.textMuted).text("S H I N O B I D R O I D", { align: "center", characterSpacing: 2 });
         doc.moveDown(0.2);
-        doc.fontSize(24).fillColor(COLORS.accent).text("ShinobiDroid", { align: "center" });
+        doc.fontSize(24).fillColor(COLORS.accent).text("Shinodroid", { align: "center" });
         doc.moveDown(0.5);
         doc.fontSize(16).fillColor(COLORS.textMuted).text("Dynamic Analysis Report", { align: "center" });
 
@@ -332,7 +332,7 @@ export async function generateDynamicPdf(fridaResults, dynamicFindings, scanMeta
             doc.switchToPage(i);
             doc.fontSize(7).fillColor(COLORS.textMuted)
                 .text(
-                    `ShinobiDroid Dynamic Analysis Report — Page ${i + 1} of ${pages.count} — Generated ${new Date().toISOString()}`,
+                    `Shinodroid Dynamic Analysis Report — Page ${i + 1} of ${pages.count} — Generated ${new Date().toISOString()}`,
                     50, doc.page.height - 30,
                     { width: pageWidth, align: "center" }
                 );

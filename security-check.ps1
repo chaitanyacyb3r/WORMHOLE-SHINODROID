@@ -1,5 +1,5 @@
 # ============================================================
-# ShinobiDroid Security Posture Check
+# Shinodroid Security Posture Check
 # Run anytime to verify your security hardening is intact.
 # Does NOT require Administrator (read-only checks).
 # ============================================================
@@ -10,7 +10,7 @@ param(
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  ShinobiDroid Security Posture Check" -ForegroundColor Cyan
+Write-Host "  Shinodroid Security Posture Check" -ForegroundColor Cyan
 Write-Host "  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor DarkGray
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
@@ -116,7 +116,7 @@ Write-Host "[5/8] Firewall Rules" -ForegroundColor White
 $fwRules = netsh advfirewall firewall show rule name=all dir=in 2>$null | Out-String
 $requiredBlocks = @("MobSF", "OpenClaw", "NextJS", "ADB", "Frida", "Emulator")
 foreach ($name in $requiredBlocks) {
-    if ($fwRules -match "ShinobiDroid-Block-$name") {
+    if ($fwRules -match "Shinodroid-Block-$name") {
         Check-Pass "Firewall block rule exists for $name"
     } else {
         Check-Fail "No firewall block rule for $name - run harden-firewall.ps1 as Admin"
