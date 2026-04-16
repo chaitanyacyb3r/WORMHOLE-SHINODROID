@@ -15,7 +15,7 @@ import CountUp from "react-countup";
 import { useInView } from "react-intersection-observer";
 import { useState, useRef, useEffect } from "react";
 import { useQuery } from "convex/react";
-import { api } from "../../../convex/_generated/api";
+import { api } from "@convex/_generated/api";
 
 /* ═══════════════════════════════════════════════════════════════════
    Design Tokens

@@ -18,7 +18,7 @@ import { useState, useEffect } from "react";
 const StarField3D = dynamic(() => import("../components/StarField3D"), { ssr: false });
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useConvexAuth, useQuery } from "convex/react";
-import { api } from "../../../convex/_generated/api";
+import { api } from "@convex/_generated/api";
 
 const navItems = [
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
