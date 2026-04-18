@@ -83,7 +83,7 @@ if ($connected) {
     $selectedAvd = if ($avds -is [string]) { $avds } else { $avds[0] }
     Write-Host "  [--] Launching: $selectedAvd" -ForegroundColor Cyan
 
-    Start-Process -FilePath "emulator" -ArgumentList "-avd", $selectedAvd, "-wipe-data", "-no-audio", "-no-boot-anim" -WindowStyle Normal
+    Start-Process -FilePath "emulator" -ArgumentList "-avd", $selectedAvd, "-writable-system", "-wipe-data", "-no-audio", "-no-boot-anim" -WindowStyle Normal
 
     $timeout = 180
     $elapsed = 0
@@ -182,6 +182,95 @@ if ($fridaRunning -match "frida-server" -and $fridaRunning -notmatch "grep") {
     cmd /c 'adb shell "nohup /data/local/tmp/frida-server > /dev/null 2>&1 &"'
     Start-Sleep -Seconds 3
     Write-Host "  [OK] Frida server started" -ForegroundColor Green
+}
+
+# -- Step 4.5: Install ZAP CA Certificate --
+Write-Host ""
+Write-Host "[Step 4.5/5] Installing OWASP ZAP CA Certificate..." -ForegroundColor Yellow
+
+$zapCert = "$env:USERPROFILE\ZAP\.ZAP\config\ssl\zap_root_ca.cer"
+if (Test-Path $zapCert) {
+    Write-Host "  [--] Found ZAP certificate, pushing to device..." -ForegroundColor Gray
+    cmd /c "adb push `"$zapCert`" /sdcard/zap_ca.cer 2>&1" | Out-Null
+    
+    # For Android 7+ (API 24+), we must install it as a system cert
+    # which requires adb root and adb remount
+    Write-Host "  [--] Installing as system certificate via tmpfs (API 24+)..." -ForegroundColor Gray
+    
+    try {
+        # Ensure root
+        cmd /c "adb root 2>&1" | Out-Null
+        Start-Sleep -Seconds 2
+        
+        # Calculate subject_hash_old natively in PowerShell
+        $certObj = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($zapCert)
+        $subjectBytes = $certObj.SubjectName.RawData
+        $md5 = [System.Security.Cryptography.MD5]::Create()
+        $hashBytes = $md5.ComputeHash($subjectBytes)
+        $hashInt = [BitConverter]::ToUInt32($hashBytes, 0)
+        $hash = '{0:x8}' -f $hashInt
+        
+        if ($hash -match "^[0-9a-f]{8}$") {
+            # Since Android 10 (API 29+), /system is strictly Read-Only.
+            # On Android 11 (API 30+), the Conscrypt APEX module manages the real trust store
+            # at /apex/com.android.conscrypt/cacerts/ — the Settings UI reads from there.
+            # Strategy: tmpfs overlay on BOTH the legacy and APEX cert directories.
+            
+            # Step 1: Overlay /system/etc/security/cacerts with tmpfs + inject cert
+            $sysCmds = @(
+                "mkdir -p -m 700 /data/local/tmp/certs",
+                "cp /system/etc/security/cacerts/* /data/local/tmp/certs/",
+                "cp /sdcard/zap_ca.cer /data/local/tmp/certs/${hash}.0",
+                "chmod 644 /data/local/tmp/certs/${hash}.0",
+                "mount -t tmpfs tmpfs /system/etc/security/cacerts",
+                "cp /data/local/tmp/certs/* /system/etc/security/cacerts/",
+                "chmod 644 /system/etc/security/cacerts/*",
+                "chcon u:object_r:system_file:s0 /system/etc/security/cacerts/*"
+            )
+            foreach ($cmd in $sysCmds) {
+                cmd /c "adb shell `"$cmd`" 2>&1" | Out-Null
+            }
+            
+            # Step 2: Overlay /apex/com.android.conscrypt/cacerts with tmpfs + inject cert
+            # This is where Android 11+ actually reads trusted certificates from.
+            $apexCmds = @(
+                "mount -t tmpfs tmpfs /apex/com.android.conscrypt/cacerts",
+                "cp /system/etc/security/cacerts/* /apex/com.android.conscrypt/cacerts/",
+                "chmod 644 /apex/com.android.conscrypt/cacerts/*",
+                "chcon u:object_r:system_file:s0 /apex/com.android.conscrypt/cacerts/*"
+            )
+            foreach ($cmd in $apexCmds) {
+                cmd /c "adb shell `"$cmd`" 2>&1" | Out-Null
+            }
+            
+            # Cleanup temp dir
+            cmd /c "adb shell rm -rf /data/local/tmp/certs 2>&1" | Out-Null
+            
+            # Verify installation in APEX path (the real trust store)
+            $check = cmd /c "adb shell ls /apex/com.android.conscrypt/cacerts/${hash}.0 2>&1"
+            if ($check -match "${hash}.0") {
+                Write-Host "  [OK] ZAP certificate installed in system + APEX trust store (${hash}.0)" -ForegroundColor Green
+            } else {
+                # Fallback check on legacy path
+                $legacyCheck = cmd /c "adb shell ls /system/etc/security/cacerts/${hash}.0 2>&1"
+                if ($legacyCheck -match "${hash}.0") {
+                    Write-Host "  [OK] ZAP certificate installed in legacy trust store (${hash}.0)" -ForegroundColor Green
+                    Write-Host "       Note: APEX mount failed — cert may not appear in Settings UI on Android 11+" -ForegroundColor Yellow
+                } else {
+                    Write-Host "  [FAIL] Certificate installation failed." -ForegroundColor Red
+                }
+            }
+        } else {
+            Write-Host "  [WARN] Failed to compute certificate hash locally." -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "  [WARN] Failed to install ZAP system cert. Interception may fail." -ForegroundColor Yellow
+        Write-Host "         Error: $_" -ForegroundColor Gray
+    }
+} else {
+    Write-Host "  [WARN] ZAP certificate not found at: $zapCert" -ForegroundColor Yellow
+    Write-Host "         Network interception will not work." -ForegroundColor Gray
+    Write-Host "         Open ZAP -> Options -> Dynamic SSL Certificates -> Generate -> Save" -ForegroundColor Gray
 }
 
 # -- Step 5: Verify everything --

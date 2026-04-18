@@ -69,6 +69,10 @@ services:
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
       # Route ADB traffic to the Windows Host ADB Server
       - ADB_SERVER_SOCKET=tcp:host.docker.internal:5037
+      # ZAP API configuration
+      - ZAP_API_URL=http://zap:8081
+      - ZAP_API_KEY=${ZAP_API_KEY:-shinodroid-zap-key}
+      - ZAP_PROXY_URL=http://zap:8080
     volumes:
       # Persist scan reports between restarts
       - reports-data:/app/reports
@@ -162,6 +166,34 @@ services:
         reservations:
           memory: 1G
           cpus: "0.5"
+
+  # ── OWASP ZAP (Network Scanning) ──────────────────────────────────────────
+  zap:
+    image: ghcr.io/zaproxy/zaproxy:stable
+    container_name: Shinodroid-zap
+    restart: unless-stopped
+    command: >
+      zap.sh -daemon
+      -host 0.0.0.0
+      -port 8080
+      -config api.addrs.addr.name=.*
+      -config api.addrs.addr.regex=true
+      -config api.key=${ZAP_API_KEY:-shinodroid-zap-key}
+    environment:
+      - ZAP_PORT=8080
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/JSON/core/view/version/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    networks:
+      - Shinodroid
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.5"
 
 networks:
   Shinodroid:

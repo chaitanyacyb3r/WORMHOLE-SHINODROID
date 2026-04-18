@@ -1221,6 +1221,20 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
     }
     log("ok", "APK installed on emulator");
 
+    // ── UI Exploration Setup ─────────────────────────────────────
+    let uiExplorerModule = null;
+    let customHooksModule = null;
+    try {
+        uiExplorerModule = await import("./ui-explorer.mjs");
+    } catch (e) {
+        log("warn", `Could not load ui-explorer.mjs: ${e.message}`);
+    }
+    try {
+        customHooksModule = await import("./custom-hooks-generator.mjs");
+    } catch (e) {
+        log("warn", `Could not load custom-hooks-generator.mjs: ${e.message}`);
+    }
+
     // 4. Ensure Frida server is running
     notify("🔧 Starting Frida server...");
     const fridaReady = await ensureFridaServer();
@@ -1254,6 +1268,19 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
         { name: "Resilience Bypass", file: join(SCRIPTS_DIR, "SHINOBI-RESILIENCE.js") },
     ];
 
+    // Append AI-free custom hooks from MobSF analysis
+    let customScriptsCount = 0;
+    if (mobsfReport && customHooksModule) {
+        try {
+            const customScripts = await customHooksModule.generateCustomHooks(mobsfReport, outDir, packageName);
+            scripts.push(...customScripts);
+            customScriptsCount = customScripts.length;
+            log("info", `Generated ${customScripts.length} custom Frida hooks from static analysis`);
+        } catch (e) {
+            log("warn", `Failed to generate custom hooks: ${e.message}`);
+        }
+    }
+
     const scriptResults = [];
     let scriptsRun = 0;
     for (const script of scripts) {
@@ -1268,6 +1295,23 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
         const result = await runFridaScript(packageName, script.file, script.name);
         scriptResults.push(result);
         scriptsRun++;
+    }
+
+    // ── UI Exploration (concurrent with Frida hooks) ────────────
+    let uiResults = null;
+    if (uiExplorerModule) {
+        // Find if AI engine is available for login handling
+        const aiEngine = context._engineMap ? context._engineMap.get("ai") : null;
+        let callLLM = null;
+        if (aiEngine && typeof aiEngine.callLLM === 'function') {
+            callLLM = aiEngine.callLLM;
+        }
+
+        uiResults = await uiExplorerModule.exploreApp(packageName, {
+            zapProxy: true, // Set to true to use ZAP proxy
+            log,
+            callLLM
+        });
     }
 
     // 6. Parse output into structured findings

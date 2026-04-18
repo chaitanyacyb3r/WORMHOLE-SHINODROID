@@ -120,6 +120,26 @@ if ($Docker) {
 
 
 # =================================================================
+#  STEP 1.5: OWASP ZAP (Network Scanning)
+# =================================================================
+Write-Host ""
+Write-Host "[Step 1.5/6] Starting OWASP ZAP Daemon..." -ForegroundColor Yellow
+
+if ($Docker) {
+    Write-Host "  [OK] ZAP starting inside Docker (Shinodroid-zap)" -ForegroundColor Green
+} else {
+    $zapPath = "C:\Program Files\ZAP\zap.bat"
+    if (Test-Path $zapPath) {
+        Write-Host "  [--] Starting ZAP daemon (port 8080)..." -ForegroundColor Gray
+        Start-Process -FilePath $zapPath -ArgumentList "-daemon", "-port", "8080", "-config", "api.key=shinodroid-zap-key", "-config", "api.addrs.addr.name=.*", "-config", "api.addrs.addr.regex=true" -WindowStyle Minimized
+        Write-Host "  [OK] ZAP daemon starting in background" -ForegroundColor Green
+    } else {
+        Write-Host "  [WARN] ZAP not found at: C:\Program Files\ZAP\zap.bat" -ForegroundColor Yellow
+        Write-Host "         Network backend scanning will be skipped." -ForegroundColor Gray
+    }
+}
+
+# =================================================================
 #  STEP 2: Discover AVDs and their API levels
 # =================================================================
 Write-Host ""
@@ -248,7 +268,7 @@ if ($alreadyRunning) {
 } elseif ($selectedAvd) {
     Write-Host "  [--] Launching: $($selectedAvd.Name)..." -ForegroundColor Cyan
 
-    Start-Process -FilePath "emulator" -ArgumentList "-avd", $selectedAvd.Name, "-no-audio", "-no-boot-anim", "-gpu", "auto" -WindowStyle Normal
+    Start-Process -FilePath "emulator" -ArgumentList "-avd", $selectedAvd.Name, "-writable-system", "-no-audio", "-no-boot-anim", "-gpu", "auto" -WindowStyle Normal
 
     # Wait for full boot
     $timeout = 120
@@ -262,9 +282,14 @@ if ($alreadyRunning) {
         if ($checkConnected) {
             try {
                 $bootDone = (cmd /c "adb shell getprop sys.boot_completed 2>&1").Trim()
-                if ($bootDone -eq "1") { $booted = $true; break }
+                if ($bootDone -eq "1") { 
+                    Write-Host "  [--] Boot completed flag received. Stabilizing..." -ForegroundColor Gray
+                    Start-Sleep -Seconds 10
+                    $booted = $true
+                    break 
+                }
             } catch { }
-            if ($elapsed -ge 40) { $booted = $true; break }
+            if ($elapsed -ge 60) { $booted = $true; break }
         }
         Write-Host "       ... waiting (${elapsed}s / ${timeout}s)" -ForegroundColor Gray
     }
