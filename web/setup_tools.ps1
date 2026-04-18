@@ -1,5 +1,5 @@
 # ================================================================
-# Shinodroid 忍ドロイド — SDK-Aware Launch Script
+# Shinodroid - SDK-Aware Launch Script
 #
 # This script:
 #   1. Starts Docker containers (MobSF, Worker, Ollama, Web)
@@ -25,10 +25,10 @@ param(
 $ErrorActionPreference = "Continue"
 
 Write-Host ""
-Write-Host "  ╔══════════════════════════════════════════╗" -ForegroundColor Magenta
-Write-Host "  ║  Shinodroid 忍ドロイド — Lab Launcher    ║" -ForegroundColor Magenta
-Write-Host "  ║  SDK-Aware Dynamic Analysis Setup        ║" -ForegroundColor Magenta
-Write-Host "  ╚══════════════════════════════════════════╝" -ForegroundColor Magenta
+Write-Host "  ==========================================" -ForegroundColor Magenta
+Write-Host "  =  Shinodroid - Lab Launcher             =" -ForegroundColor Magenta
+Write-Host "  =  SDK-Aware Dynamic Analysis Setup      =" -ForegroundColor Magenta
+Write-Host "  ==========================================" -ForegroundColor Magenta
 Write-Host ""
 
 $openclawPath = Split-Path -Parent $PSScriptRoot
@@ -37,9 +37,9 @@ if (-not (Test-Path "$openclawPath\docker-compose.yml")) {
     $openclawPath = "C:\Users\elliot\Documents\OPENCLAW-SECURITY-INTEGRITY"
 }
 
-# ─────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # Step 1: Docker Containers
-# ─────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 if (-not $SkipDocker) {
     Write-Host "[Step 1/6] Starting Docker containers..." -ForegroundColor Yellow
 
@@ -74,15 +74,15 @@ if (-not $SkipDocker) {
     if ($mobsfReady) {
         Write-Host "  [OK] All containers running" -ForegroundColor Green
     } else {
-        Write-Host "  [WARN] MobSF may still be starting — continuing anyway" -ForegroundColor Yellow
+        Write-Host "  [WARN] MobSF may still be starting - continuing anyway" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "[Step 1/6] Skipping Docker (--SkipDocker)" -ForegroundColor Gray
+    Write-Host "[Step 1/6] Skipping Docker startup (SkipDocker flag set)" -ForegroundColor Gray
 }
 
-# ─────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # Step 2: Discover AVDs and their API levels
-# ─────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 Write-Host ""
 Write-Host "[Step 2/6] Discovering Android Virtual Devices..." -ForegroundColor Yellow
 
@@ -128,38 +128,37 @@ if ($avdNames.Count -eq 0) {
 
     Write-Host "  Found $($avdList.Count) AVD(s):" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  ┌────┬────────────────────────────────────┬───────────┐" -ForegroundColor DarkGray
-    Write-Host "  │ #  │ AVD Name                           │ API Level │" -ForegroundColor DarkGray
-    Write-Host "  ├────┼────────────────────────────────────┼───────────┤" -ForegroundColor DarkGray
+    Write-Host "    #   AVD Name                            API Level" -ForegroundColor DarkGray
+    Write-Host "    --- -----------------------------------  ---------" -ForegroundColor DarkGray
     $idx = 1
     foreach ($avd in $avdList) {
-        $nameStr = $avd.Name.PadRight(34)
-        $apiStr  = if ($avd.ApiLevel -gt 0) { "API $($avd.ApiLevel)".PadRight(9) } else { "unknown  " }
-        Write-Host "  │ $($idx.ToString().PadLeft(2)) │ $nameStr │ $apiStr │" -ForegroundColor White
+        $nameStr = $avd.Name.PadRight(35)
+        $apiStr  = if ($avd.ApiLevel -gt 0) { "API $($avd.ApiLevel)" } else { "unknown" }
+        Write-Host "    $($idx.ToString().PadLeft(2))  $nameStr  $apiStr" -ForegroundColor White
         $idx++
     }
-    Write-Host "  └────┴────────────────────────────────────┴───────────┘" -ForegroundColor DarkGray
     Write-Host ""
 }
 
-# ─────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # Step 3: Select the best AVD
-# ─────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 Write-Host "[Step 3/6] Selecting emulator..." -ForegroundColor Yellow
 
 $selectedAvd = $null
 
 if ($SkipEmulator) {
-    Write-Host "  [--] Skipping emulator launch (--SkipEmulator)" -ForegroundColor Gray
+    Write-Host "  [--] Skipping emulator launch (SkipEmulator flag set)" -ForegroundColor Gray
 } elseif ($avdList.Count -eq 0) {
-    Write-Host "  [--] No AVDs available — skipping emulator launch" -ForegroundColor Gray
+    Write-Host "  [--] No AVDs available - skipping emulator launch" -ForegroundColor Gray
 } else {
     if ($AvdName -ne "") {
         # User specified an exact AVD name
         $selectedAvd = $avdList | Where-Object { $_.Name -eq $AvdName }
         if (-not $selectedAvd) {
             Write-Host "  [FAIL] AVD '$AvdName' not found!" -ForegroundColor Red
-            Write-Host "         Available: $($avdList | ForEach-Object { $_.Name } | Join-String -Separator ', ')" -ForegroundColor Gray
+            $availableNames = ($avdList | ForEach-Object { $_.Name }) -join ", "
+            Write-Host "         Available: $availableNames" -ForegroundColor Gray
             exit 1
         }
         Write-Host "  [OK] User-selected: $($selectedAvd.Name) (API $($selectedAvd.ApiLevel))" -ForegroundColor Green
@@ -174,7 +173,7 @@ if ($SkipEmulator) {
             $above = $avdList | Where-Object { $_.ApiLevel -ge $TargetApi } | Sort-Object ApiLevel | Select-Object -First 1
             if ($above) {
                 $selectedAvd = $above
-                Write-Host "  [OK] Closest match: $($selectedAvd.Name) (API $($selectedAvd.ApiLevel)) — target was API $TargetApi" -ForegroundColor Green
+                Write-Host "  [OK] Closest match: $($selectedAvd.Name) (API $($selectedAvd.ApiLevel)) - target was API $TargetApi" -ForegroundColor Green
             } else {
                 $below = $avdList | Where-Object { $_.ApiLevel -gt 0 } | Sort-Object ApiLevel -Descending | Select-Object -First 1
                 if ($below) {
@@ -185,16 +184,16 @@ if ($SkipEmulator) {
             }
         }
     } else {
-        # No preference — pick the highest API level
+        # No preference - pick the highest API level
         $selectedAvd = $avdList | Where-Object { $_.ApiLevel -gt 0 } | Sort-Object ApiLevel -Descending | Select-Object -First 1
         if (-not $selectedAvd) { $selectedAvd = $avdList | Select-Object -First 1 }
         Write-Host "  [OK] Auto-selected (highest API): $($selectedAvd.Name) (API $($selectedAvd.ApiLevel))" -ForegroundColor Green
     }
 }
 
-# ─────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # Step 4: Launch the selected emulator
-# ─────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 Write-Host ""
 Write-Host "[Step 4/6] Launching emulator..." -ForegroundColor Yellow
 
@@ -213,7 +212,7 @@ if ($alreadyRunning) {
         if ($TargetApi -gt 0 -and $runningApi -ne "$TargetApi") {
             $diff = [Math]::Abs([int]$runningApi - $TargetApi)
             if ($diff -le 2) {
-                Write-Host "  [OK] Close to target API $TargetApi (±$diff) — results will be reliable" -ForegroundColor Green
+                Write-Host "  [OK] Close to target API $TargetApi (within $diff) - results will be reliable" -ForegroundColor Green
             } else {
                 Write-Host "  [WARN] Running API $runningApi differs from target API $TargetApi by $diff levels" -ForegroundColor Yellow
                 Write-Host "         For best accuracy, close this emulator and rerun with -AvdName" -ForegroundColor Gray
@@ -243,7 +242,7 @@ if ($alreadyRunning) {
                     break
                 }
             } catch { }
-            # After 40s, accept even if boot_completed isn't set
+            # After 40s, accept even if boot_completed is not set
             if ($elapsed -ge 40) {
                 $booted = $true
                 break
@@ -258,16 +257,16 @@ if ($alreadyRunning) {
     }
 
     $runningApi = (cmd /c "adb shell getprop ro.build.version.sdk 2>&1").Trim()
-    Write-Host "  [OK] Emulator booted — $($selectedAvd.Name) (API $runningApi)" -ForegroundColor Green
+    Write-Host "  [OK] Emulator booted - $($selectedAvd.Name) (API $runningApi)" -ForegroundColor Green
 } else {
-    Write-Host "  [--] No emulator to launch — dynamic analysis will be skipped" -ForegroundColor Gray
+    Write-Host "  [--] No emulator to launch - dynamic analysis will be skipped" -ForegroundColor Gray
 }
 
-# ─────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # Step 5: Setup Frida Server + Expose ADB to Docker
-# ─────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 Write-Host ""
-Write-Host "[Step 5/6] Setting up Frida server & ADB bridge..." -ForegroundColor Yellow
+Write-Host "[Step 5/6] Setting up Frida server and ADB bridge..." -ForegroundColor Yellow
 
 # Check if emulator is connected
 $devices2 = cmd /c "adb devices 2>&1"
@@ -293,19 +292,19 @@ if ($connected) {
     Start-Process powershell -ArgumentList @(
         "-NoExit",
         "-Command",
-        "Write-Host 'ADB Server — DO NOT CLOSE THIS WINDOW' -ForegroundColor Red; Write-Host 'This bridges your emulator to Docker containers.' -ForegroundColor Gray; Write-Host ''; adb -a nodaemon server start"
+        "Write-Host 'ADB Server - DO NOT CLOSE THIS WINDOW' -ForegroundColor Red; Write-Host 'This bridges your emulator to Docker containers.' -ForegroundColor Gray; Write-Host ''; adb -a nodaemon server start"
     )
 
     # Wait for ADB server to come up
     Start-Sleep -Seconds 3
     Write-Host "  [OK] ADB server exposed to Docker via host.docker.internal:5037" -ForegroundColor Green
 } else {
-    Write-Host "  [--] No emulator connected — skipping Frida setup" -ForegroundColor Gray
+    Write-Host "  [--] No emulator connected - skipping Frida setup" -ForegroundColor Gray
 }
 
-# ─────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # Step 6: Open Dashboard
-# ─────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 Write-Host ""
 Write-Host "[Step 6/6] Opening dashboard..." -ForegroundColor Yellow
 
@@ -313,9 +312,9 @@ Start-Sleep -Seconds 3
 Start-Process "http://localhost:3000/"
 
 Write-Host ""
-Write-Host "  ╔══════════════════════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "  ║              Shinodroid Lab is READY!                ║" -ForegroundColor Green
-Write-Host "  ╚══════════════════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host "  ==========================================" -ForegroundColor Green
+Write-Host "  =        Shinodroid Lab is READY!        =" -ForegroundColor Green
+Write-Host "  ==========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Dashboard:     http://localhost:3000" -ForegroundColor White
 Write-Host "  MobSF:         http://localhost:8000" -ForegroundColor White
