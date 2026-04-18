@@ -363,14 +363,6 @@ Write-Host "[Step 6/6] Starting scan worker..." -ForegroundColor Yellow
 
 if ($Docker) {
     Write-Host "  [OK] Worker running inside Docker (Shinodroid-worker)" -ForegroundColor Green
-} else {
-    Write-Host "  [--] Starting scan worker (new terminal)..." -ForegroundColor Gray
-    Start-Process powershell -ArgumentList @(
-        "-NoExit", "-Command",
-        "Set-Location '$openclawPath'; Write-Host 'Scan Worker (watcher.mjs)' -ForegroundColor Cyan; node watcher.mjs"
-    )
-    Start-Sleep -Seconds 2
-    Write-Host "  [OK] Scan worker started" -ForegroundColor Green
 }
 
 
@@ -398,14 +390,13 @@ if ($Docker) {
     Write-Host "    docker compose ps                   # container status" -ForegroundColor Gray
     Write-Host "    docker compose down                 # stop everything" -ForegroundColor Gray
 } else {
-    Write-Host "  Running in LOCAL mode (5 terminal windows opened)" -ForegroundColor Cyan
+    Write-Host "  Running in LOCAL mode" -ForegroundColor Cyan
     Write-Host "    Terminal 1: MobSF server" -ForegroundColor Gray
     Write-Host "    Terminal 2: Android emulator" -ForegroundColor Gray
     Write-Host "    Terminal 3: Convex dev server" -ForegroundColor Gray
     Write-Host "    Terminal 4: Next.js dev server" -ForegroundColor Gray
-    Write-Host "    Terminal 5: Scan worker" -ForegroundColor Gray
     Write-Host ""
-    Write-Host "  To stop: close all terminal windows" -ForegroundColor Gray
+    Write-Host "  To stop: press Ctrl+C here, then close terminal windows" -ForegroundColor Gray
 }
 Write-Host ""
 Write-Host "  SDK-Aware Options:" -ForegroundColor DarkGray
@@ -413,3 +404,18 @@ Write-Host "    .\setup_tools.ps1 -TargetApi 34     # API 34 emulator" -Foregrou
 Write-Host "    .\setup_tools.ps1 -AvdName Pixel_6  # specific AVD" -ForegroundColor Gray
 Write-Host "    .\setup_tools.ps1 -Docker           # use Docker instead" -ForegroundColor Gray
 Write-Host ""
+
+# =================================================================
+#  STEP 6: Scan Worker (FOREGROUND - logs stream here)
+# =================================================================
+if (-not $Docker) {
+    Write-Host "  ==========================================" -ForegroundColor Cyan
+    Write-Host "  =  Scan Worker - LIVE LOGS BELOW         =" -ForegroundColor Cyan
+    Write-Host "  =  Upload an APK to start scanning       =" -ForegroundColor Cyan
+    Write-Host "  =  Press Ctrl+C to stop                  =" -ForegroundColor Cyan
+    Write-Host "  ==========================================" -ForegroundColor Cyan
+    Write-Host ""
+
+    Set-Location $openclawPath
+    node watcher.mjs
+}
