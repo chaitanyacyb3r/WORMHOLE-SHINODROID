@@ -18,7 +18,7 @@
 param(
     [int]$TargetApi = 0,          # Preferred API level (0 = auto/highest)
     [string]$AvdName = "",        # Specific AVD name to launch
-    [switch]$SkipDocker,          # Skip Docker startup (if already running)
+    [switch]$Docker,              # Include Docker container startup
     [switch]$SkipEmulator         # Skip emulator launch (if already running)
 )
 
@@ -40,7 +40,7 @@ if (-not (Test-Path "$openclawPath\docker-compose.yml")) {
 # -----------------------------------------------------------------
 # Step 1: Docker Containers
 # -----------------------------------------------------------------
-if (-not $SkipDocker) {
+if ($Docker) {
     Write-Host "[Step 1/6] Starting Docker containers..." -ForegroundColor Yellow
 
     # Check Docker is running
@@ -77,7 +77,7 @@ if (-not $SkipDocker) {
         Write-Host "  [WARN] MobSF may still be starting - continuing anyway" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "[Step 1/6] Skipping Docker startup (SkipDocker flag set)" -ForegroundColor Gray
+    Write-Host "[Step 1/6] Skipping Docker (use -Docker flag to start containers)" -ForegroundColor Gray
 }
 
 # -----------------------------------------------------------------
@@ -330,5 +330,5 @@ Write-Host ""
 Write-Host "  SDK-Aware Relaunch:" -ForegroundColor DarkGray
 Write-Host "    .\setup_tools.ps1 -TargetApi 34     # launch API 34 emulator" -ForegroundColor Gray
 Write-Host "    .\setup_tools.ps1 -AvdName Pixel_6  # launch specific AVD" -ForegroundColor Gray
-Write-Host "    .\setup_tools.ps1 -SkipDocker       # skip Docker rebuild" -ForegroundColor Gray
+Write-Host "    .\setup_tools.ps1 -Docker           # also start Docker containers" -ForegroundColor Gray
 Write-Host ""
