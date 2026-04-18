@@ -14,7 +14,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile, readFile, access } from "node:fs/promises";
+import { writeFile, readFile, readdir, access } from "node:fs/promises";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -163,6 +163,327 @@ async function getPackageName(mobsfReport, apkPath) {
     }
 
     return null;
+}
+
+// ── SDK-Aware Emulator Selection ────────────────────────────────────────────
+
+/**
+ * Extract SDK version metadata from the APK.
+ *
+ * Resolution order:
+ *   1. MobSF report JSON (fastest — already parsed during static phase)
+ *   2. aapt2/aapt on PATH
+ *   3. aapt2 from Android SDK build-tools directory (Windows/Linux)
+ *
+ * @param {object|null} mobsfReport
+ * @param {string} apkPath
+ * @returns {{ minSdk: number|null, targetSdk: number|null, maxSdk: number|null }}
+ */
+async function extractSdkInfo(mobsfReport, apkPath) {
+    const info = { minSdk: null, targetSdk: null, maxSdk: null };
+
+    // ── Source 1: MobSF report ──────────────────────────────────────────
+    if (mobsfReport) {
+        const min = mobsfReport.min_sdk ?? mobsfReport.minsdk ?? mobsfReport.min_sdk_version;
+        const target = mobsfReport.target_sdk ?? mobsfReport.targetsdk ?? mobsfReport.target_sdk_version;
+        const max = mobsfReport.max_sdk ?? mobsfReport.maxsdk ?? mobsfReport.max_sdk_version;
+        if (min != null) info.minSdk = parseInt(String(min), 10) || null;
+        if (target != null) info.targetSdk = parseInt(String(target), 10) || null;
+        if (max != null) info.maxSdk = parseInt(String(max), 10) || null;
+
+        if (info.minSdk || info.targetSdk) {
+            log("ok", `SDK from MobSF — min=${info.minSdk} target=${info.targetSdk} max=${info.maxSdk}`);
+            return info;
+        }
+    }
+
+    // ── Source 2: aapt2 / aapt on PATH ──────────────────────────────────
+    for (const tool of ["aapt2", "aapt"]) {
+        try {
+            const { stdout } = await execFileAsync(tool, ["dump", "badging", apkPath], { timeout: 30_000 });
+            const minMatch = stdout.match(/sdkVersion:'(\d+)'/);
+            const targetMatch = stdout.match(/targetSdkVersion:'(\d+)'/);
+            const maxMatch = stdout.match(/maxSdkVersion:'(\d+)'/);
+            if (minMatch) info.minSdk = parseInt(minMatch[1], 10);
+            if (targetMatch) info.targetSdk = parseInt(targetMatch[1], 10);
+            if (maxMatch) info.maxSdk = parseInt(maxMatch[1], 10);
+
+            if (info.minSdk || info.targetSdk) {
+                log("ok", `SDK from ${tool} — min=${info.minSdk} target=${info.targetSdk} max=${info.maxSdk}`);
+                return info;
+            }
+        } catch { /* tool not on PATH — try next */ }
+    }
+
+    // ── Source 3: Android SDK build-tools directory ─────────────────────
+    const sdkRoot = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT
+        || (process.platform === "win32"
+            ? join(process.env.LOCALAPPDATA || "", "Android", "Sdk")
+            : "");
+    if (sdkRoot) {
+        try {
+            const btDir = join(sdkRoot, "build-tools");
+            const versions = (await readdir(btDir)).sort().reverse(); // newest first
+            for (const ver of versions) {
+                const aapt2Path = join(btDir, ver,
+                    process.platform === "win32" ? "aapt2.exe" : "aapt2");
+                try {
+                    await access(aapt2Path);
+                    const { stdout } = await execFileAsync(aapt2Path,
+                        ["dump", "badging", apkPath], { timeout: 30_000 });
+                    const minMatch = stdout.match(/sdkVersion:'(\d+)'/);
+                    const targetMatch = stdout.match(/targetSdkVersion:'(\d+)'/);
+                    if (minMatch) info.minSdk = parseInt(minMatch[1], 10);
+                    if (targetMatch) info.targetSdk = parseInt(targetMatch[1], 10);
+                    if (info.minSdk || info.targetSdk) {
+                        log("ok", `SDK from ${aapt2Path} — min=${info.minSdk} target=${info.targetSdk}`);
+                        return info;
+                    }
+                } catch { /* this version's aapt2 didn't work — try next */ }
+            }
+        } catch { /* build-tools dir not found */ }
+    }
+
+    log("warn", "Could not extract SDK versions from APK — will use any available emulator");
+    return info;
+}
+
+/**
+ * Query the API level of the currently connected emulator via ADB.
+ * @returns {number|null}
+ */
+async function getEmulatorApiLevel() {
+    try {
+        const { stdout } = await execFileAsync(ADB,
+            adb("shell", "getprop", "ro.build.version.sdk"), { timeout: 10_000 });
+        const level = parseInt(stdout.trim(), 10);
+        return isNaN(level) ? null : level;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * List locally installed AVDs with their API levels.
+ *
+ * Reads each AVD's config.ini to extract the `target=android-XX` field.
+ * Only works on the host machine (not inside Docker).
+ *
+ * @returns {Array<{ name: string, apiLevel: number }>}
+ */
+async function listLocalAvds() {
+    const avds = [];
+
+    let avdNames;
+    try {
+        const { stdout } = await execFileAsync("emulator", ["-list-avds"], { timeout: 10_000 });
+        avdNames = stdout.trim().split("\n").map(s => s.trim()).filter(Boolean);
+    } catch {
+        log("info", "emulator CLI not available — cannot list AVDs (expected inside Docker)");
+        return avds;
+    }
+
+    if (avdNames.length === 0) return avds;
+
+    const avdRoot = join(
+        process.env.USERPROFILE || process.env.HOME || "",
+        ".android", "avd"
+    );
+
+    for (const name of avdNames) {
+        const configPath = join(avdRoot, `${name}.avd`, "config.ini");
+        try {
+            const content = await readFile(configPath, "utf-8");
+            // Match: target=android-31  OR  image.sysdir.1=system-images/android-31/...
+            const targetMatch = content.match(/^target=android-(\d+)/m);
+            const imageDirMatch = content.match(/image\.sysdir\.1=.*android-(\d+)/m);
+            const apiLevel = parseInt((targetMatch || imageDirMatch)?.[1], 10);
+
+            if (!isNaN(apiLevel)) {
+                avds.push({ name, apiLevel });
+                log("info", `  AVD: ${name} → API ${apiLevel}`);
+            } else {
+                log("warn", `  AVD: ${name} → API unknown (no target= in config)`);
+            }
+        } catch {
+            log("warn", `  AVD: ${name} → config.ini unreadable`);
+        }
+    }
+
+    return avds;
+}
+
+/**
+ * Select the best AVD for a given APK's SDK requirements.
+ *
+ * Selection priority (highest to lowest):
+ *   1. Exact match on targetSdkVersion
+ *   2. Closest AVD with apiLevel >= targetSdkVersion (prefer lowest above)
+ *   3. Closest AVD with apiLevel >= minSdkVersion   (prefer highest below target)
+ *   4. Any AVD (absolute last resort)
+ *
+ * @param {Array<{name: string, apiLevel: number}>} avds
+ * @param {{ minSdk: number|null, targetSdk: number|null }} sdkInfo
+ * @returns {{ avd: {name: string, apiLevel: number}|null, matchQuality: string }}
+ */
+function selectBestAvd(avds, sdkInfo) {
+    if (avds.length === 0) return { avd: null, matchQuality: "none" };
+    if (!sdkInfo.targetSdk && !sdkInfo.minSdk) {
+        return { avd: avds[0], matchQuality: "unknown_sdk" };
+    }
+
+    const target = sdkInfo.targetSdk || sdkInfo.minSdk;
+    const min = sdkInfo.minSdk || target;
+
+    // 1. Exact target match
+    const exact = avds.find(a => a.apiLevel === target);
+    if (exact) return { avd: exact, matchQuality: "exact" };
+
+    // 2. Closest >= target (prefer lowest above target)
+    const aboveTarget = avds
+        .filter(a => a.apiLevel >= target)
+        .sort((a, b) => a.apiLevel - b.apiLevel);
+    if (aboveTarget.length > 0) return { avd: aboveTarget[0], matchQuality: "above_target" };
+
+    // 3. Closest >= min (prefer highest, i.e. closest to target)
+    const aboveMin = avds
+        .filter(a => a.apiLevel >= min)
+        .sort((a, b) => b.apiLevel - a.apiLevel);
+    if (aboveMin.length > 0) return { avd: aboveMin[0], matchQuality: "above_min" };
+
+    // 4. Last resort — highest available
+    const sorted = [...avds].sort((a, b) => b.apiLevel - a.apiLevel);
+    return { avd: sorted[0], matchQuality: "fallback" };
+}
+
+/**
+ * Validate SDK compatibility between the APK and the running emulator.
+ *
+ * @param {{ minSdk: number|null, targetSdk: number|null, maxSdk: number|null }} sdkInfo
+ * @param {number|null} emulatorApi
+ * @returns {{ compatible: boolean, optimal: boolean, warnings: string[] }}
+ */
+function validateSdkCompatibility(sdkInfo, emulatorApi) {
+    const result = { compatible: true, optimal: true, warnings: [] };
+
+    if (!emulatorApi) {
+        result.warnings.push("Could not determine emulator API level");
+        result.optimal = false;
+        return result;
+    }
+
+    if (!sdkInfo.minSdk && !sdkInfo.targetSdk) {
+        result.warnings.push("SDK versions unknown — compatibility not verified");
+        result.optimal = false;
+        return result;
+    }
+
+    // Hard incompatibility: emulator API < minSdk
+    if (sdkInfo.minSdk && emulatorApi < sdkInfo.minSdk) {
+        result.compatible = false;
+        result.optimal = false;
+        result.warnings.push(
+            `INCOMPATIBLE: Emulator API ${emulatorApi} < APK minSdkVersion ${sdkInfo.minSdk}. ` +
+            `The APK will refuse to install. Create an AVD with API ${sdkInfo.minSdk}+ in Android Studio.`
+        );
+        return result;
+    }
+
+    // Hard incompatibility: emulator API > maxSdk (rare but possible)
+    if (sdkInfo.maxSdk && emulatorApi > sdkInfo.maxSdk) {
+        result.compatible = false;
+        result.optimal = false;
+        result.warnings.push(
+            `INCOMPATIBLE: Emulator API ${emulatorApi} > APK maxSdkVersion ${sdkInfo.maxSdk}. ` +
+            `Create an AVD with API ${sdkInfo.maxSdk} or lower.`
+        );
+        return result;
+    }
+
+    // Suboptimal: emulator API != targetSdk
+    if (sdkInfo.targetSdk && emulatorApi !== sdkInfo.targetSdk) {
+        result.optimal = false;
+        const diff = Math.abs(emulatorApi - sdkInfo.targetSdk);
+        if (diff <= 2) {
+            result.warnings.push(
+                `Emulator API ${emulatorApi} is close to target SDK ${sdkInfo.targetSdk} (±${diff}) — results will be reliable.`
+            );
+        } else {
+            result.warnings.push(
+                `Emulator API ${emulatorApi} differs from target SDK ${sdkInfo.targetSdk} by ${diff} levels. ` +
+                `For best accuracy, create an API ${sdkInfo.targetSdk} AVD in Android Studio.`
+            );
+        }
+    }
+
+    return result;
+}
+
+/**
+ * Launch a specific AVD by name using the `emulator` CLI.
+ *
+ * In Docker environments (detected via ADB_SERVER_SOCKET), logs
+ * a recommendation and returns false — the host must start it manually.
+ *
+ * @param {string} avdName   Exact AVD name from `emulator -list-avds`
+ * @param {function} onProgress
+ * @returns {boolean}
+ */
+async function launchSpecificAvd(avdName, onProgress) {
+    const notify = onProgress || (() => { });
+
+    // Docker containers cannot launch host emulators
+    if (process.env.ADB_SERVER_SOCKET) {
+        log("info", `Docker detected — please start AVD "${avdName}" on your host machine`);
+        notify(`⚠️ Start AVD "${avdName}" on your host and run: adb -a nodaemon server start`);
+        return false;
+    }
+
+    notify(`🚀 Launching AVD: ${avdName}...`);
+    log("info", `Launching emulator: ${avdName}`);
+
+    try {
+        const proc = spawn("emulator", [
+            "-avd", avdName,
+            "-no-audio",
+            "-no-boot-anim",
+            "-gpu", "auto",
+        ], {
+            detached: true,
+            stdio: "ignore",
+            ...(process.platform === "win32" ? { windowsHide: true } : {}),
+        });
+        proc.unref();
+    } catch (err) {
+        log("error", `Failed to launch emulator: ${err.message}`);
+        return false;
+    }
+
+    // Wait for boot (up to 2 minutes, checking every 5s)
+    for (let attempt = 0; attempt < 24; attempt++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const emu = await checkEmulator();
+        if (emu.connected) {
+            try {
+                const { stdout } = await execFileAsync(ADB,
+                    adb("shell", "getprop", "sys.boot_completed"), { timeout: 10_000 });
+                if (stdout.trim() === "1") {
+                    log("ok", `Emulator fully booted after ${(attempt + 1) * 5}s: ${emu.device}`);
+                    return true;
+                }
+            } catch { /* boot_completed not ready yet */ }
+            // After 35s accept a connected device even if boot isn't flagged done
+            if (attempt >= 6) {
+                log("ok", `Emulator connected after ${(attempt + 1) * 5}s: ${emu.device}`);
+                await new Promise(r => setTimeout(r, 3000));
+                return true;
+            }
+        }
+        notify(`⏳ Waiting for ${avdName}... (${(attempt + 1) * 5}s)`);
+    }
+
+    log("error", `${avdName} did not come online within 2 minutes`);
+    return false;
 }
 
 // ── Frida Helpers ───────────────────────────────────────────────────────────
@@ -817,29 +1138,71 @@ function countFridaMatches(scriptResults, pattern) {
 export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, onProgress = null, scanId = null) {
     const notify = onProgress || (() => { });
 
-    // 1. Check emulator — attempt auto-launch if not found
+    // 1. Extract SDK version requirements from APK
+    notify("📋 Extracting SDK version info...");
+    const sdkInfo = await extractSdkInfo(mobsfReport, apkPath);
+    log("info", `APK SDK: min=${sdkInfo.minSdk || "?"} target=${sdkInfo.targetSdk || "?"} max=${sdkInfo.maxSdk || "any"}`);
+
+    // 2. Check emulator — attempt SDK-aware auto-launch if not found
     notify("🔌 Checking emulator connection...");
     let emu = await checkEmulator();
+    let emulatorApi = null;
+    let sdkCompat = null;
 
     if (!emu.connected) {
-        notify("⚙️ No emulator found. Attempting auto-launch via setup-emulator.ps1...");
-        const launched = await launchEmulator(notify);
-        if (launched) {
-            emu = await checkEmulator();
+        // No emulator running — try SDK-aware launch first
+        const avds = await listLocalAvds();
+        if (avds.length > 0 && (sdkInfo.targetSdk || sdkInfo.minSdk)) {
+            const { avd: bestAvd, matchQuality } = selectBestAvd(avds, sdkInfo);
+            if (bestAvd) {
+                notify(`🚀 Launching ${bestAvd.name} (API ${bestAvd.apiLevel}, match: ${matchQuality})...`);
+                log("info", `SDK-aware AVD selection: ${bestAvd.name} (API ${bestAvd.apiLevel}) — match: ${matchQuality}`);
+                const launched = await launchSpecificAvd(bestAvd.name, notify);
+                if (launched) emu = await checkEmulator();
+            }
+        }
+        // Fallback to legacy launch if SDK-aware selection didn't work
+        if (!emu.connected) {
+            notify("⚙️ Attempting generic emulator launch...");
+            const launched = await launchEmulator(notify);
+            if (launched) emu = await checkEmulator();
         }
     }
 
     if (!emu.connected) {
         log("warn", "No emulator connected — skipping dynamic analysis");
+        const recommendation = sdkInfo.targetSdk
+            ? `Create an AVD with API ${sdkInfo.targetSdk} in Android Studio → Tools → Device Manager.`
+            : "Create an AVD in Android Studio → Tools → Device Manager.";
         return {
             success: false,
-            error: "No emulator connected. Start an Android emulator or run setup-emulator.ps1.",
+            error: `No emulator connected. ${recommendation}`,
             skipped: true,
+            sdkInfo,
         };
     }
-    log("ok", `Emulator connected: ${emu.device}`);
 
-    // 2. Get package name
+    // Validate SDK compatibility with the running emulator
+    emulatorApi = await getEmulatorApiLevel();
+    sdkCompat = validateSdkCompatibility(sdkInfo, emulatorApi);
+    log("ok", `Emulator connected: ${emu.device} (API ${emulatorApi || "unknown"})`);
+
+    if (!sdkCompat.compatible) {
+        for (const w of sdkCompat.warnings) {
+            log("error", w);
+            notify(`❌ ${w}`);
+        }
+        // Proceed anyway — APK install will fail naturally if truly incompatible
+    } else if (!sdkCompat.optimal) {
+        for (const w of sdkCompat.warnings) {
+            log("warn", w);
+            notify(`⚠️ ${w}`);
+        }
+    } else {
+        log("ok", `SDK compatibility: ✅ Optimal (emulator API ${emulatorApi} = target ${sdkInfo.targetSdk})`);
+    }
+
+    // 3. Get package name
     const packageName = await getPackageName(mobsfReport, apkPath);
     if (!packageName) {
         return {
@@ -928,6 +1291,13 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
         device: emu.device,
         packageName,
         scriptTimeout: FRIDA_SCRIPT_TIMEOUT,
+        sdkInfo,
+        emulatorApiLevel: emulatorApi,
+        sdkCompatibility: sdkCompat ? {
+            compatible: sdkCompat.compatible,
+            optimal: sdkCompat.optimal,
+            warnings: sdkCompat.warnings,
+        } : null,
         scripts: scriptResults.map(r => ({
             name: r.name,
             success: r.success,
