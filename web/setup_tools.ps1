@@ -1,24 +1,27 @@
 # ================================================================
 # Shinodroid - SDK-Aware Launch Script
 #
-# This script:
-#   1. Starts Docker containers (MobSF, Worker, Ollama, Web)
-#   2. Discovers local AVDs and their API levels
-#   3. Launches the emulator (or lets you pick one)
-#   4. Exposes ADB to Docker so the worker can reach the emulator
-#   5. Runs setup-emulator.ps1 to install/start Frida server
-#   6. Opens the dashboard in your browser
+# DEFAULT (no flags): Runs all services LOCALLY, step by step:
+#   1. MobSF server (local Python venv)
+#   2. Emulator (SDK-aware AVD selection)
+#   3. Frida server on emulator
+#   4. Convex dev server
+#   5. Next.js dev server
+#   6. Scan worker (node watcher.mjs)
+#
+# With -Docker flag: Uses Docker Compose instead of local services.
 #
 # Usage:
-#   .\setup_tools.ps1                  # auto-select AVD
-#   .\setup_tools.ps1 -TargetApi 34    # prefer API 34 AVD
-#   .\setup_tools.ps1 -AvdName Pixel_6 # launch a specific AVD
+#   .\setup_tools.ps1                  # local mode, auto-select AVD
+#   .\setup_tools.ps1 -TargetApi 34    # local mode, prefer API 34
+#   .\setup_tools.ps1 -AvdName Pixel_6 # local mode, specific AVD
+#   .\setup_tools.ps1 -Docker          # Docker mode
 # ================================================================
 
 param(
     [int]$TargetApi = 0,          # Preferred API level (0 = auto/highest)
     [string]$AvdName = "",        # Specific AVD name to launch
-    [switch]$Docker,              # Include Docker container startup
+    [switch]$Docker,              # Use Docker Compose instead of local services
     [switch]$SkipEmulator         # Skip emulator launch (if already running)
 )
 
@@ -33,26 +36,36 @@ Write-Host ""
 
 $openclawPath = Split-Path -Parent $PSScriptRoot
 if (-not (Test-Path "$openclawPath\docker-compose.yml")) {
-    # Fallback: try the known absolute path
     $openclawPath = "C:\Users\elliot\Documents\OPENCLAW-SECURITY-INTEGRITY"
 }
+$webPath   = Join-Path $openclawPath "web"
+$mobsfPath = "C:\Users\elliot\Documents\Mobile-Security-Framework-MobSF"
 
-# -----------------------------------------------------------------
-# Step 1: Docker Containers
-# -----------------------------------------------------------------
 if ($Docker) {
-    Write-Host "[Step 1/6] Starting Docker containers..." -ForegroundColor Yellow
+    Write-Host "  Mode: DOCKER" -ForegroundColor Cyan
+} else {
+    Write-Host "  Mode: LOCAL (sequential startup)" -ForegroundColor Cyan
+}
+Write-Host ""
 
-    # Check Docker is running
+
+# =================================================================
+#  STEP 1: Backend Services (MobSF + Ollama)
+# =================================================================
+Write-Host "[Step 1/6] Starting backend services..." -ForegroundColor Yellow
+
+if ($Docker) {
+    # --- Docker mode ---
     $dockerCheck = docker info 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [FAIL] Docker Desktop is not running!" -ForegroundColor Red
-        Write-Host "         Please start Docker Desktop and try again." -ForegroundColor Gray
+        Write-Host "         Start Docker Desktop and try again." -ForegroundColor Gray
         exit 1
     }
     Write-Host "  [OK] Docker Desktop is running" -ForegroundColor Green
 
     Push-Location $openclawPath
+    Write-Host "  [--] Building and starting containers..." -ForegroundColor Gray
     docker compose up -d 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [FAIL] docker compose up failed" -ForegroundColor Red
@@ -61,28 +74,54 @@ if ($Docker) {
     }
     Pop-Location
 
-    # Wait for MobSF health check
-    Write-Host "  [--] Waiting for MobSF to become healthy..." -ForegroundColor Gray
-    $mobsfReady = $false
+    # Wait for MobSF
+    Write-Host "  [--] Waiting for MobSF container to be healthy..." -ForegroundColor Gray
     for ($i = 0; $i -lt 30; $i++) {
         try {
             $health = docker inspect --format='{{.State.Health.Status}}' Shinodroid-mobsf 2>$null
-            if ($health -eq "healthy") { $mobsfReady = $true; break }
+            if ($health -eq "healthy") { break }
         } catch { }
         Start-Sleep -Seconds 2
     }
-    if ($mobsfReady) {
-        Write-Host "  [OK] All containers running" -ForegroundColor Green
-    } else {
-        Write-Host "  [WARN] MobSF may still be starting - continuing anyway" -ForegroundColor Yellow
-    }
+    Write-Host "  [OK] Docker containers started" -ForegroundColor Green
+
 } else {
-    Write-Host "[Step 1/6] Skipping Docker (use -Docker flag to start containers)" -ForegroundColor Gray
+    # --- Local mode ---
+    # 1a. Start MobSF in its own terminal
+    if (Test-Path "$mobsfPath\run.bat") {
+        Write-Host "  [--] Starting MobSF server (new terminal)..." -ForegroundColor Gray
+        Start-Process powershell -ArgumentList @(
+            "-NoExit", "-Command",
+            "Set-Location '$mobsfPath'; & '.\mobsf-venv\Scripts\Activate.ps1'; & '.\run.bat'"
+        )
+        # Wait for MobSF to bind to port 8000 before proceeding
+        Write-Host "  [--] Waiting for MobSF on port 8000..." -ForegroundColor Gray
+        $mobsfUp = $false
+        for ($i = 0; $i -lt 30; $i++) {
+            try {
+                $tcp = New-Object System.Net.Sockets.TcpClient
+                $tcp.Connect("127.0.0.1", 8000)
+                $tcp.Close()
+                $mobsfUp = $true
+                break
+            } catch { }
+            Start-Sleep -Seconds 2
+        }
+        if ($mobsfUp) {
+            Write-Host "  [OK] MobSF is running on http://localhost:8000" -ForegroundColor Green
+        } else {
+            Write-Host "  [WARN] MobSF may still be starting (timed out waiting)" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  [WARN] MobSF not found at: $mobsfPath" -ForegroundColor Yellow
+        Write-Host "         Static analysis will not work without MobSF." -ForegroundColor Gray
+    }
 }
 
-# -----------------------------------------------------------------
-# Step 2: Discover AVDs and their API levels
-# -----------------------------------------------------------------
+
+# =================================================================
+#  STEP 2: Discover AVDs and their API levels
+# =================================================================
 Write-Host ""
 Write-Host "[Step 2/6] Discovering Android Virtual Devices..." -ForegroundColor Yellow
 
@@ -93,7 +132,7 @@ try {
     $rawAvds = cmd /c "emulator -list-avds 2>&1"
     $avdNames = $rawAvds | Where-Object { $_.Trim() -ne "" -and $_ -notmatch "^INFO" }
 } catch {
-    Write-Host "  [WARN] emulator command not found. Add Android SDK emulator/ to PATH." -ForegroundColor Yellow
+    Write-Host "  [WARN] emulator command not found. Add SDK emulator/ to PATH." -ForegroundColor Yellow
 }
 
 if ($avdNames.Count -eq 0) {
@@ -101,7 +140,7 @@ if ($avdNames.Count -eq 0) {
     Write-Host "         Create AVDs in Android Studio -> Tools -> Device Manager:" -ForegroundColor Gray
     Write-Host "           - Pixel 6a, API 34, google_apis, x86_64  (modern apps)" -ForegroundColor Gray
     Write-Host "           - Pixel 4,  API 28, google_apis, x86_64  (legacy apps)" -ForegroundColor Gray
-    Write-Host "         IMPORTANT: Use 'google_apis' NOT 'google_apis_playstore'" -ForegroundColor Cyan
+    Write-Host "         Use 'google_apis' NOT 'google_apis_playstore'" -ForegroundColor Cyan
 } else {
     $avdRoot = Join-Path $env:USERPROFILE ".android\avd"
 
@@ -112,7 +151,6 @@ if ($avdNames.Count -eq 0) {
 
         if (Test-Path $configPath) {
             $content = Get-Content $configPath -Raw
-            # Parse target=android-XX or image.sysdir.1=...android-XX/...
             if ($content -match "target=android-(\d+)") {
                 $apiLevel = [int]$Matches[1]
             } elseif ($content -match "image\.sysdir\.1=.*android-(\d+)") {
@@ -140,91 +178,79 @@ if ($avdNames.Count -eq 0) {
     Write-Host ""
 }
 
-# -----------------------------------------------------------------
-# Step 3: Select the best AVD
-# -----------------------------------------------------------------
+
+# =================================================================
+#  STEP 3: Select the best AVD
+# =================================================================
 Write-Host "[Step 3/6] Selecting emulator..." -ForegroundColor Yellow
 
 $selectedAvd = $null
 
 if ($SkipEmulator) {
-    Write-Host "  [--] Skipping emulator launch (SkipEmulator flag set)" -ForegroundColor Gray
+    Write-Host "  [--] Skipping emulator (SkipEmulator flag set)" -ForegroundColor Gray
 } elseif ($avdList.Count -eq 0) {
-    Write-Host "  [--] No AVDs available - skipping emulator launch" -ForegroundColor Gray
+    Write-Host "  [--] No AVDs available - skipping" -ForegroundColor Gray
 } else {
     if ($AvdName -ne "") {
-        # User specified an exact AVD name
         $selectedAvd = $avdList | Where-Object { $_.Name -eq $AvdName }
         if (-not $selectedAvd) {
-            Write-Host "  [FAIL] AVD '$AvdName' not found!" -ForegroundColor Red
             $availableNames = ($avdList | ForEach-Object { $_.Name }) -join ", "
+            Write-Host "  [FAIL] AVD '$AvdName' not found!" -ForegroundColor Red
             Write-Host "         Available: $availableNames" -ForegroundColor Gray
             exit 1
         }
         Write-Host "  [OK] User-selected: $($selectedAvd.Name) (API $($selectedAvd.ApiLevel))" -ForegroundColor Green
     } elseif ($TargetApi -gt 0) {
-        # SDK-aware selection: find best match for requested API
-        # Priority: exact match > closest above > closest below
+        # Exact match
         $exact = $avdList | Where-Object { $_.ApiLevel -eq $TargetApi }
         if ($exact) {
             $selectedAvd = $exact | Select-Object -First 1
             Write-Host "  [OK] Exact match: $($selectedAvd.Name) (API $($selectedAvd.ApiLevel))" -ForegroundColor Green
         } else {
+            # Closest above
             $above = $avdList | Where-Object { $_.ApiLevel -ge $TargetApi } | Sort-Object ApiLevel | Select-Object -First 1
             if ($above) {
                 $selectedAvd = $above
-                Write-Host "  [OK] Closest match: $($selectedAvd.Name) (API $($selectedAvd.ApiLevel)) - target was API $TargetApi" -ForegroundColor Green
+                Write-Host "  [OK] Closest match: $($selectedAvd.Name) (API $($selectedAvd.ApiLevel)) - target was $TargetApi" -ForegroundColor Green
             } else {
+                # Highest below
                 $below = $avdList | Where-Object { $_.ApiLevel -gt 0 } | Sort-Object ApiLevel -Descending | Select-Object -First 1
                 if ($below) {
                     $selectedAvd = $below
-                    Write-Host "  [WARN] No AVD with API >= $TargetApi. Using highest: $($selectedAvd.Name) (API $($selectedAvd.ApiLevel))" -ForegroundColor Yellow
-                    Write-Host "         For best results, create an API $TargetApi AVD in Android Studio." -ForegroundColor Gray
+                    Write-Host "  [WARN] No AVD >= API $TargetApi. Using: $($selectedAvd.Name) (API $($selectedAvd.ApiLevel))" -ForegroundColor Yellow
                 }
             }
         }
     } else {
-        # No preference - pick the highest API level
+        # No preference - highest API
         $selectedAvd = $avdList | Where-Object { $_.ApiLevel -gt 0 } | Sort-Object ApiLevel -Descending | Select-Object -First 1
         if (-not $selectedAvd) { $selectedAvd = $avdList | Select-Object -First 1 }
-        Write-Host "  [OK] Auto-selected (highest API): $($selectedAvd.Name) (API $($selectedAvd.ApiLevel))" -ForegroundColor Green
+        Write-Host "  [OK] Auto-selected (highest): $($selectedAvd.Name) (API $($selectedAvd.ApiLevel))" -ForegroundColor Green
     }
 }
 
-# -----------------------------------------------------------------
-# Step 4: Launch the selected emulator
-# -----------------------------------------------------------------
-Write-Host ""
-Write-Host "[Step 4/6] Launching emulator..." -ForegroundColor Yellow
 
-# Check if an emulator is already running
+# =================================================================
+#  STEP 4: Launch emulator + Frida
+# =================================================================
+Write-Host ""
+Write-Host "[Step 4/6] Launching emulator + Frida server..." -ForegroundColor Yellow
+
 $devices = cmd /c "adb devices 2>&1"
 $alreadyRunning = $devices | Select-String "device$"
 
 if ($alreadyRunning) {
     Write-Host "  [OK] Emulator already running!" -ForegroundColor Green
-
-    # Show what API level is running
     try {
         $runningApi = (cmd /c "adb shell getprop ro.build.version.sdk 2>&1").Trim()
-        Write-Host "  [OK] Running emulator API level: $runningApi" -ForegroundColor Cyan
-
-        if ($TargetApi -gt 0 -and $runningApi -ne "$TargetApi") {
-            $diff = [Math]::Abs([int]$runningApi - $TargetApi)
-            if ($diff -le 2) {
-                Write-Host "  [OK] Close to target API $TargetApi (within $diff) - results will be reliable" -ForegroundColor Green
-            } else {
-                Write-Host "  [WARN] Running API $runningApi differs from target API $TargetApi by $diff levels" -ForegroundColor Yellow
-                Write-Host "         For best accuracy, close this emulator and rerun with -AvdName" -ForegroundColor Gray
-            }
-        }
+        Write-Host "  [OK] Running API level: $runningApi" -ForegroundColor Cyan
     } catch { }
 } elseif ($selectedAvd) {
     Write-Host "  [--] Launching: $($selectedAvd.Name)..." -ForegroundColor Cyan
 
     Start-Process -FilePath "emulator" -ArgumentList "-avd", $selectedAvd.Name, "-no-audio", "-no-boot-anim", "-gpu", "auto" -WindowStyle Normal
 
-    # Wait for boot
+    # Wait for full boot
     $timeout = 120
     $elapsed = 0
     $booted = $false
@@ -234,19 +260,11 @@ if ($alreadyRunning) {
         $checkDevices = cmd /c "adb devices 2>&1"
         $checkConnected = $checkDevices | Select-String "device$"
         if ($checkConnected) {
-            # Check sys.boot_completed
             try {
                 $bootDone = (cmd /c "adb shell getprop sys.boot_completed 2>&1").Trim()
-                if ($bootDone -eq "1") {
-                    $booted = $true
-                    break
-                }
+                if ($bootDone -eq "1") { $booted = $true; break }
             } catch { }
-            # After 40s, accept even if boot_completed is not set
-            if ($elapsed -ge 40) {
-                $booted = $true
-                break
-            }
+            if ($elapsed -ge 40) { $booted = $true; break }
         }
         Write-Host "       ... waiting (${elapsed}s / ${timeout}s)" -ForegroundColor Gray
     }
@@ -262,53 +280,104 @@ if ($alreadyRunning) {
     Write-Host "  [--] No emulator to launch - dynamic analysis will be skipped" -ForegroundColor Gray
 }
 
-# -----------------------------------------------------------------
-# Step 5: Setup Frida Server + Expose ADB to Docker
-# -----------------------------------------------------------------
-Write-Host ""
-Write-Host "[Step 5/6] Setting up Frida server and ADB bridge..." -ForegroundColor Yellow
-
-# Check if emulator is connected
+# Install Frida server on emulator (if connected)
 $devices2 = cmd /c "adb devices 2>&1"
 $connected = $devices2 | Select-String "device$"
 
 if ($connected) {
-    # Run setup-emulator.ps1 to install Frida server
     $setupScript = Join-Path $openclawPath "setup-emulator.ps1"
     if (Test-Path $setupScript) {
-        Write-Host "  [--] Installing/starting Frida server on emulator..." -ForegroundColor Gray
+        Write-Host "  [--] Installing Frida server on emulator..." -ForegroundColor Gray
         & $setupScript
-    } else {
-        Write-Host "  [WARN] setup-emulator.ps1 not found at: $setupScript" -ForegroundColor Yellow
     }
 
-    # Kill existing ADB server and restart in network mode for Docker
-    Write-Host ""
-    Write-Host "  [--] Restarting ADB server in network mode (for Docker bridge)..." -ForegroundColor Gray
-    cmd /c "adb kill-server 2>&1" | Out-Null
-    Start-Sleep -Seconds 1
-
-    # Start ADB server in a new terminal window (must stay open)
-    Start-Process powershell -ArgumentList @(
-        "-NoExit",
-        "-Command",
-        "Write-Host 'ADB Server - DO NOT CLOSE THIS WINDOW' -ForegroundColor Red; Write-Host 'This bridges your emulator to Docker containers.' -ForegroundColor Gray; Write-Host ''; adb -a nodaemon server start"
-    )
-
-    # Wait for ADB server to come up
-    Start-Sleep -Seconds 3
-    Write-Host "  [OK] ADB server exposed to Docker via host.docker.internal:5037" -ForegroundColor Green
-} else {
-    Write-Host "  [--] No emulator connected - skipping Frida setup" -ForegroundColor Gray
+    if ($Docker) {
+        # Docker needs ADB bridge
+        Write-Host "  [--] Restarting ADB in network mode for Docker..." -ForegroundColor Gray
+        cmd /c "adb kill-server 2>&1" | Out-Null
+        Start-Sleep -Seconds 1
+        Start-Process powershell -ArgumentList @(
+            "-NoExit", "-Command",
+            "Write-Host 'ADB Server - DO NOT CLOSE' -ForegroundColor Red; Write-Host 'Bridges emulator to Docker.' -ForegroundColor Gray; adb -a nodaemon server start"
+        )
+        Start-Sleep -Seconds 3
+        Write-Host "  [OK] ADB server bridged to Docker" -ForegroundColor Green
+    }
 }
 
-# -----------------------------------------------------------------
-# Step 6: Open Dashboard
-# -----------------------------------------------------------------
-Write-Host ""
-Write-Host "[Step 6/6] Opening dashboard..." -ForegroundColor Yellow
 
-Start-Sleep -Seconds 3
+# =================================================================
+#  STEP 5: Frontend Services (Convex + Next.js)
+# =================================================================
+Write-Host ""
+Write-Host "[Step 5/6] Starting frontend services..." -ForegroundColor Yellow
+
+if ($Docker) {
+    Write-Host "  [OK] Web dashboard running inside Docker (Shinodroid-web)" -ForegroundColor Green
+} else {
+    # 5a. Convex dev server (must start BEFORE Next.js)
+    Write-Host "  [--] Starting Convex dev server (new terminal)..." -ForegroundColor Gray
+    Start-Process powershell -ArgumentList @(
+        "-NoExit", "-Command",
+        "Set-Location '$webPath'; Write-Host 'Convex Dev Server' -ForegroundColor Cyan; npx convex dev"
+    )
+
+    # Wait for Convex to initialize before starting Next.js
+    Write-Host "  [--] Waiting for Convex to initialize..." -ForegroundColor Gray
+    Start-Sleep -Seconds 8
+    Write-Host "  [OK] Convex dev server started" -ForegroundColor Green
+
+    # 5b. Next.js dev server
+    Write-Host "  [--] Starting Next.js dev server (new terminal)..." -ForegroundColor Gray
+    Start-Process powershell -ArgumentList @(
+        "-NoExit", "-Command",
+        "Set-Location '$webPath'; Write-Host 'Next.js Dev Server' -ForegroundColor Cyan; npm run dev"
+    )
+
+    # Wait for Next.js to bind to port 3000
+    Write-Host "  [--] Waiting for Next.js on port 3000..." -ForegroundColor Gray
+    $nextUp = $false
+    for ($i = 0; $i -lt 20; $i++) {
+        try {
+            $tcp = New-Object System.Net.Sockets.TcpClient
+            $tcp.Connect("127.0.0.1", 3000)
+            $tcp.Close()
+            $nextUp = $true
+            break
+        } catch { }
+        Start-Sleep -Seconds 2
+    }
+    if ($nextUp) {
+        Write-Host "  [OK] Next.js running on http://localhost:3000" -ForegroundColor Green
+    } else {
+        Write-Host "  [WARN] Next.js may still be compiling (timed out waiting)" -ForegroundColor Yellow
+    }
+}
+
+
+# =================================================================
+#  STEP 6: Scan Worker
+# =================================================================
+Write-Host ""
+Write-Host "[Step 6/6] Starting scan worker..." -ForegroundColor Yellow
+
+if ($Docker) {
+    Write-Host "  [OK] Worker running inside Docker (Shinodroid-worker)" -ForegroundColor Green
+} else {
+    Write-Host "  [--] Starting scan worker (new terminal)..." -ForegroundColor Gray
+    Start-Process powershell -ArgumentList @(
+        "-NoExit", "-Command",
+        "Set-Location '$openclawPath'; Write-Host 'Scan Worker (watcher.mjs)' -ForegroundColor Cyan; node watcher.mjs"
+    )
+    Start-Sleep -Seconds 2
+    Write-Host "  [OK] Scan worker started" -ForegroundColor Green
+}
+
+
+# =================================================================
+#  DONE - Summary
+# =================================================================
+Write-Host ""
 Start-Process "http://localhost:3000/"
 
 Write-Host ""
@@ -322,13 +391,25 @@ if ($selectedAvd) {
     Write-Host "  Emulator:      $($selectedAvd.Name) (API $($selectedAvd.ApiLevel))" -ForegroundColor White
 }
 Write-Host ""
-Write-Host "  Commands:" -ForegroundColor DarkGray
-Write-Host "    docker logs -f Shinodroid-worker    # watch scan progress" -ForegroundColor Gray
-Write-Host "    docker compose ps                   # check container status" -ForegroundColor Gray
-Write-Host "    docker compose down                 # stop everything" -ForegroundColor Gray
+
+if ($Docker) {
+    Write-Host "  Running in DOCKER mode" -ForegroundColor Cyan
+    Write-Host "    docker logs -f Shinodroid-worker    # watch scan progress" -ForegroundColor Gray
+    Write-Host "    docker compose ps                   # container status" -ForegroundColor Gray
+    Write-Host "    docker compose down                 # stop everything" -ForegroundColor Gray
+} else {
+    Write-Host "  Running in LOCAL mode (5 terminal windows opened)" -ForegroundColor Cyan
+    Write-Host "    Terminal 1: MobSF server" -ForegroundColor Gray
+    Write-Host "    Terminal 2: Android emulator" -ForegroundColor Gray
+    Write-Host "    Terminal 3: Convex dev server" -ForegroundColor Gray
+    Write-Host "    Terminal 4: Next.js dev server" -ForegroundColor Gray
+    Write-Host "    Terminal 5: Scan worker" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "  To stop: close all terminal windows" -ForegroundColor Gray
+}
 Write-Host ""
-Write-Host "  SDK-Aware Relaunch:" -ForegroundColor DarkGray
-Write-Host "    .\setup_tools.ps1 -TargetApi 34     # launch API 34 emulator" -ForegroundColor Gray
-Write-Host "    .\setup_tools.ps1 -AvdName Pixel_6  # launch specific AVD" -ForegroundColor Gray
-Write-Host "    .\setup_tools.ps1 -Docker           # also start Docker containers" -ForegroundColor Gray
+Write-Host "  SDK-Aware Options:" -ForegroundColor DarkGray
+Write-Host "    .\setup_tools.ps1 -TargetApi 34     # API 34 emulator" -ForegroundColor Gray
+Write-Host "    .\setup_tools.ps1 -AvdName Pixel_6  # specific AVD" -ForegroundColor Gray
+Write-Host "    .\setup_tools.ps1 -Docker           # use Docker instead" -ForegroundColor Gray
 Write-Host ""
