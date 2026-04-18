@@ -417,5 +417,5 @@ if (-not $Docker) {
     Write-Host ""
 
     Set-Location $openclawPath
-    node watcher.mjs
+    node supabase-worker.mjs
 }
