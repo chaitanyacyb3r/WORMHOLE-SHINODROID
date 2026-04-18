@@ -276,6 +276,21 @@ export default function ScanDetailPage() {
                             <Zap size={16} /> Dynamic PDF
                         </a>
                     )}
+                    {scan.aiReportStorageId && reportUrls?.ai && (
+                        <a href={reportUrls.ai} target="_blank" rel="noopener noreferrer"
+                            className="btn-secondary flex items-center gap-2 shadow-[0_0_15px_rgba(236,72,153,0.3)]"
+                            style={{ 
+                                padding: "8px 16px", 
+                                fontSize: "0.875rem", 
+                                textDecoration: "none", 
+                                background: "linear-gradient(135deg, rgba(236,72,153,0.1), rgba(168,85,247,0.1))",
+                                borderColor: "var(--border)",
+                                color: "#ec4899"
+                            }}
+                            title="Download AI Threat Report">
+                            <Shield size={16} /> AI Threat Report
+                        </a>
+                    )}
                     <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium" style={{
                         background: isScanning ? "rgba(59,130,246,0.12)" : scan.status === "completed" ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)",
                         color: isScanning ? "#60a5fa" : scan.status === "completed" ? "#34d399" : "#f87171",
