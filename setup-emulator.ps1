@@ -213,7 +213,7 @@ if (Test-Path $zapCert) {
         if ($hash -match "^[0-9a-f]{8}$") {
             # Since Android 10 (API 29+), /system is strictly Read-Only.
             # On Android 11 (API 30+), the Conscrypt APEX module manages the real trust store
-            # at /apex/com.android.conscrypt/cacerts/ — the Settings UI reads from there.
+            # at /apex/com.android.conscrypt/cacerts/ -- the Settings UI reads from there.
             # Strategy: tmpfs overlay on BOTH the legacy and APEX cert directories.
             
             # Step 1: Overlay /system/etc/security/cacerts with tmpfs + inject cert
@@ -255,7 +255,7 @@ if (Test-Path $zapCert) {
                 $legacyCheck = cmd /c "adb shell ls /system/etc/security/cacerts/${hash}.0 2>&1"
                 if ($legacyCheck -match "${hash}.0") {
                     Write-Host "  [OK] ZAP certificate installed in legacy trust store (${hash}.0)" -ForegroundColor Green
-                    Write-Host "       Note: APEX mount failed — cert may not appear in Settings UI on Android 11+" -ForegroundColor Yellow
+                    Write-Host "       Note: APEX mount failed -- cert may not appear in Settings UI on Android 11+" -ForegroundColor Yellow
                 } else {
                     Write-Host "  [FAIL] Certificate installation failed." -ForegroundColor Red
                 }

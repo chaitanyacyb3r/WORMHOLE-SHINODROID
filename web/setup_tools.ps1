@@ -128,13 +128,13 @@ Write-Host "[Step 1.5/6] Starting OWASP ZAP Daemon..." -ForegroundColor Yellow
 if ($Docker) {
     Write-Host "  [OK] ZAP starting inside Docker (Shinodroid-zap)" -ForegroundColor Green
 } else {
-    $zapPath = "C:\Program Files\ZAP\zap.bat"
+    $zapPath = "C:\Program Files\ZAP\Zed Attack Proxy\zap.bat"
     if (Test-Path $zapPath) {
         Write-Host "  [--] Starting ZAP daemon (port 8080)..." -ForegroundColor Gray
         Start-Process -FilePath $zapPath -ArgumentList "-daemon", "-port", "8080", "-config", "api.key=shinodroid-zap-key", "-config", "api.addrs.addr.name=.*", "-config", "api.addrs.addr.regex=true" -WindowStyle Minimized
         Write-Host "  [OK] ZAP daemon starting in background" -ForegroundColor Green
     } else {
-        Write-Host "  [WARN] ZAP not found at: C:\Program Files\ZAP\zap.bat" -ForegroundColor Yellow
+        Write-Host "  [WARN] ZAP not found at: $zapPath" -ForegroundColor Yellow
         Write-Host "         Network backend scanning will be skipped." -ForegroundColor Gray
     }
 }

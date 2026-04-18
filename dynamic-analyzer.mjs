@@ -1297,21 +1297,18 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
         scriptsRun++;
     }
 
-    // ── UI Exploration (concurrent with Frida hooks) ────────────
+    // ── UI Exploration (after Frida hooks) ────────────────────
     let uiResults = null;
     if (uiExplorerModule) {
-        // Find if AI engine is available for login handling
-        const aiEngine = context._engineMap ? context._engineMap.get("ai") : null;
-        let callLLM = null;
-        if (aiEngine && typeof aiEngine.callLLM === 'function') {
-            callLLM = aiEngine.callLLM;
+        try {
+            uiResults = await uiExplorerModule.exploreApp(packageName, {
+                zapProxy: true,
+                log,
+                callLLM: null // LLM login is optional; orchestrator-level context not available here
+            });
+        } catch (e) {
+            log("warn", `UI Explorer failed: ${e.message}`);
         }
-
-        uiResults = await uiExplorerModule.exploreApp(packageName, {
-            zapProxy: true, // Set to true to use ZAP proxy
-            log,
-            callLLM
-        });
     }
 
     // 6. Parse output into structured findings
