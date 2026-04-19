@@ -86,6 +86,41 @@ export const create = mutation({
     },
 });
 
+/**
+ * Cancel a pending or scanning scan (marks it as failed).
+ */
+export const cancel = mutation({
+    args: { id: v.id("scans") },
+    handler: async (ctx, args) => {
+        const userId = await getAuthUserId(ctx);
+        if (!userId) throw new Error("Not authenticated");
+
+        const scan = await ctx.db.get(args.id);
+        if (!scan || scan.userId !== userId) throw new Error("Not found or unauthorized");
+
+        if (scan.status === "pending" || scan.status === "scanning") {
+            await ctx.db.patch(args.id, { status: "failed", errorMessage: "Cancelled by user" });
+        }
+    },
+});
+
+/**
+ * Completely delete a scan from the dashboard history.
+ */
+export const remove = mutation({
+    args: { id: v.id("scans") },
+    handler: async (ctx, args) => {
+        const userId = await getAuthUserId(ctx);
+        if (!userId) throw new Error("Not authenticated");
+
+        const scan = await ctx.db.get(args.id);
+        if (!scan || scan.userId !== userId) throw new Error("Not found or unauthorized");
+
+        // Could also optionally clean up storageIds here, but we'll let Convex handle garbage collection later on or keep it simple
+        await ctx.db.delete(args.id);
+    },
+});
+
 // ── Internal functions (worker-only, not exposed to clients) ────────────
 
 /**

@@ -216,37 +216,39 @@ if (Test-Path $zapCert) {
             # Since Android 10 (API 29+), /system is strictly Read-Only.
             # On Android 11 (API 30+), the Conscrypt APEX module manages the real trust store
             # at /apex/com.android.conscrypt/cacerts/ -- the Settings UI reads from there.
-            # Strategy: tmpfs overlay on BOTH the legacy and APEX cert directories.
+            # Strategy: tmpfs overlay on BOTH the legacy and APEX cert directories but ONLY using 
+            # nsenter into init's mount namespace so that ALL apps see the new mounts.
             
-            # Step 1: Overlay /system/etc/security/cacerts with tmpfs + inject cert
-            $sysCmds = @(
+            # Step 1: Prep the cert dir 
+            $prepCmds = @(
                 "mkdir -p -m 700 /data/local/tmp/certs",
                 "cp /system/etc/security/cacerts/* /data/local/tmp/certs/",
                 "cp /sdcard/zap_ca.cer /data/local/tmp/certs/${hash}.0",
-                "chmod 644 /data/local/tmp/certs/${hash}.0",
-                "mount -t tmpfs tmpfs /system/etc/security/cacerts",
-                "cp /data/local/tmp/certs/* /system/etc/security/cacerts/",
-                "chmod 644 /system/etc/security/cacerts/*",
-                "chcon u:object_r:system_file:s0 /system/etc/security/cacerts/*"
+                "chmod 644 /data/local/tmp/certs/${hash}.0"
             )
-            foreach ($cmd in $sysCmds) {
+            foreach ($cmd in $prepCmds) {
                 cmd /c "adb shell `"$cmd`" 2>&1"
             }
-            
-            # Step 2: Overlay /apex/com.android.conscrypt/cacerts with tmpfs + inject cert
-            # This is where Android 11+ actually reads trusted certificates from.
-            $apexCmds = @(
-                "mount -t tmpfs tmpfs /apex/com.android.conscrypt/cacerts",
-                "cp /system/etc/security/cacerts/* /apex/com.android.conscrypt/cacerts/",
-                "chmod 644 /apex/com.android.conscrypt/cacerts/*",
-                "chcon u:object_r:system_file:s0 /apex/com.android.conscrypt/cacerts/*"
+
+            # Step 2: Overlay /system and /apex globally
+            $globalCmds = @(
+                "nsenter --mount=/proc/1/ns/mnt -- mount -t tmpfs tmpfs /system/etc/security/cacerts",
+                "nsenter --mount=/proc/1/ns/mnt -- sh -c 'cp /data/local/tmp/certs/* /system/etc/security/cacerts/'",
+                "nsenter --mount=/proc/1/ns/mnt -- sh -c 'chmod 644 /system/etc/security/cacerts/*'",
+                "nsenter --mount=/proc/1/ns/mnt -- sh -c 'chcon u:object_r:system_file:s0 /system/etc/security/cacerts/*'",
+                
+                "nsenter --mount=/proc/1/ns/mnt -- mount -t tmpfs tmpfs /apex/com.android.conscrypt/cacerts",
+                "nsenter --mount=/proc/1/ns/mnt -- sh -c 'cp /data/local/tmp/certs/* /apex/com.android.conscrypt/cacerts/'",
+                "nsenter --mount=/proc/1/ns/mnt -- sh -c 'chmod 644 /apex/com.android.conscrypt/cacerts/*'",
+                "nsenter --mount=/proc/1/ns/mnt -- sh -c 'chcon u:object_r:system_file:s0 /apex/com.android.conscrypt/cacerts/*'"
             )
-            foreach ($cmd in $apexCmds) {
+            foreach ($cmd in $globalCmds) {
                 cmd /c "adb shell `"$cmd`" 2>&1"
             }
             
             # Cleanup temp dir
             cmd /c "adb shell rm -rf /data/local/tmp/certs 2>&1"
+
 
             
             # Verify installation in APEX path (the real trust store)

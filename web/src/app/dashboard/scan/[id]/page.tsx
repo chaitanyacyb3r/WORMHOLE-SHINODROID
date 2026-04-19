@@ -4,10 +4,12 @@ import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import {
     Shield, Clock, CheckCircle, AlertTriangle, Download, ArrowLeft,
-    FileText, Activity, Zap, Terminal, WifiOff, ChevronDown, ChevronUp
+    FileText, Activity, Zap, Terminal, WifiOff, ChevronDown, ChevronUp,
+    XCircle, Trash2
 } from "lucide-react";
 import Link from "next/link";
-import { useQuery } from "convex/react";
+import { useRouter } from "next/navigation";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "@convex/_generated/api";
 import { Id } from "@convex/_generated/dataModel";
 
@@ -143,6 +145,24 @@ export default function ScanDetailPage() {
     const scan = useQuery(api.scans.get, { id: scanId });
     const findings = useQuery(api.findings.listByScan, { scanId }) ?? [];
     const reportUrls = useQuery(api.storage.getReportUrl, scan ? { scanId } : "skip");
+    
+    // Mutations for controlling scan state
+    const cancelScan = useMutation(api.scans.cancel);
+    const removeScan = useMutation(api.scans.remove);
+    const router = useRouter();
+
+    const handleCancel = async () => {
+        if (confirm("Are you sure you want to cancel this scan?")) {
+            await cancelScan({ id: scanId });
+        }
+    };
+
+    const handleRemove = async () => {
+        if (confirm("Are you sure you want to permanently delete this scan?")) {
+            await removeScan({ id: scanId });
+            router.push("/dashboard");
+        }
+    };
     const loading = scan === undefined;
     const prevStatusRef = useRef<string | null>(null);
 
@@ -298,6 +318,18 @@ export default function ScanDetailPage() {
                         {isScanning ? <Clock size={14} /> : scan.status === "completed" ? <CheckCircle size={14} /> : <AlertTriangle size={14} />}
                         {scan.status}
                     </span>
+                    
+                    {/* Control Actions */}
+                    <div className="flex bg-[var(--bg-secondary)] border border-[var(--border)] rounded-md overflow-hidden">
+                        {(scan.status === "pending" || scan.status === "scanning") && (
+                            <button onClick={handleCancel} className="p-2 hover:bg-neutral-800 transition-colors text-[var(--text-muted)] hover:text-red-400" title="Cancel Scan">
+                                <XCircle size={18} />
+                            </button>
+                        )}
+                        <button onClick={handleRemove} className="p-2 hover:bg-neutral-800 transition-colors text-[var(--text-muted)] hover:text-red-400 border-l border-[var(--border)]" title="Delete Scan">
+                            <Trash2 size={18} />
+                        </button>
+                    </div>
                 </div>
             </div>
 
