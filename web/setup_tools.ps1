@@ -131,7 +131,7 @@ if ($Docker) {
     $zapPath = "C:\Program Files\ZAP\Zed Attack Proxy\zap.bat"
     if (Test-Path $zapPath) {
         Write-Host "  [--] Starting ZAP daemon (port 8080)..." -ForegroundColor Gray
-        Start-Process -FilePath $zapPath -ArgumentList "-daemon", "-port", "8080", "-config", "api.key=shinodroid-zap-key", "-config", "api.addrs.addr.name=.*", "-config", "api.addrs.addr.regex=true" -WindowStyle Minimized
+        Start-Process -FilePath $zapPath -ArgumentList "-daemon", "-port", "8080", "-config", "api.key=shinodroid-zap-key", "-config", "api.addrs.addr.name=.*", "-config", "api.addrs.addr.regex=true" -WorkingDirectory "C:\Program Files\ZAP\Zed Attack Proxy" -WindowStyle Minimized
         Write-Host "  [OK] ZAP daemon starting in background" -ForegroundColor Green
     } else {
         Write-Host "  [WARN] ZAP not found at: $zapPath" -ForegroundColor Yellow
