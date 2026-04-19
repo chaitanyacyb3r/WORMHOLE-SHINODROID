@@ -191,15 +191,17 @@ Write-Host "[Step 4.5/5] Installing OWASP ZAP CA Certificate..." -ForegroundColo
 $zapCert = "$env:USERPROFILE\ZAP\.ZAP\config\ssl\zap_root_ca.cer"
 if (Test-Path $zapCert) {
     Write-Host "  [--] Found ZAP certificate, pushing to device..." -ForegroundColor Gray
-    cmd /c "adb push `"$zapCert`" /sdcard/zap_ca.cer 2>&1" | Out-Null
+    
+    # Do NOT pipe to Out-Null so we can see if adb push or adb root hangs
+    cmd /c "adb push `"$zapCert`" /sdcard/zap_ca.cer 2>&1"
     
     # For Android 7+ (API 24+), we must install it as a system cert
-    # which requires adb root and adb remount
     Write-Host "  [--] Installing as system certificate via tmpfs (API 24+)..." -ForegroundColor Gray
     
     try {
-        # Ensure root
-        cmd /c "adb root 2>&1" | Out-Null
+        # Ensure root and WAIT for device to come back online
+        cmd /c "adb root 2>&1"
+        cmd /c "adb wait-for-device 2>&1"
         Start-Sleep -Seconds 2
         
         # Calculate subject_hash_old natively in PowerShell
@@ -228,7 +230,7 @@ if (Test-Path $zapCert) {
                 "chcon u:object_r:system_file:s0 /system/etc/security/cacerts/*"
             )
             foreach ($cmd in $sysCmds) {
-                cmd /c "adb shell `"$cmd`" 2>&1" | Out-Null
+                cmd /c "adb shell `"$cmd`" 2>&1"
             }
             
             # Step 2: Overlay /apex/com.android.conscrypt/cacerts with tmpfs + inject cert
@@ -240,11 +242,12 @@ if (Test-Path $zapCert) {
                 "chcon u:object_r:system_file:s0 /apex/com.android.conscrypt/cacerts/*"
             )
             foreach ($cmd in $apexCmds) {
-                cmd /c "adb shell `"$cmd`" 2>&1" | Out-Null
+                cmd /c "adb shell `"$cmd`" 2>&1"
             }
             
             # Cleanup temp dir
-            cmd /c "adb shell rm -rf /data/local/tmp/certs 2>&1" | Out-Null
+            cmd /c "adb shell rm -rf /data/local/tmp/certs 2>&1"
+
             
             # Verify installation in APEX path (the real trust store)
             $check = cmd /c "adb shell ls /apex/com.android.conscrypt/cacerts/${hash}.0 2>&1"
