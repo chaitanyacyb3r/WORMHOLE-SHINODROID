@@ -122,7 +122,6 @@ The SRS establishes a shared understanding between WORMHOLE Security and all sta
 
 **Product Name:** Shinodroid 忍ドロイド **Organization:** WORMHOLE Security **Version:** 1.0.0
 
-Shinodroid is a full-stack, AI-powered, automated Android application security analysis platform. The system accepts Android Package Kit (APK) files submitted via three distinct interfaces — a web dashboard, a Telegram bot, and a folder-drop mechanism — and subjects each submission to a structured, multi-phase, multi-engine security analysis pipeline.
 
 ### What Shinodroid Does
 
@@ -202,7 +201,6 @@ Shinodroid is a full-stack, AI-powered, automated Android application security a
 |[REF-09]|React 19.2.3 Documentation|react.dev|
 |[REF-10]|Docker Compose Reference|docs.docker.com|
 |[REF-11]|Ollama API Documentation|ollama.ai|
-|[REF-12]|Telegram Bot API Documentation|core.telegram.org/bots/api|
 |[REF-13]|Puppeteer 24.40.0 Documentation|pptr.dev|
 |[REF-14]|Androwarn Documentation|github.com/maaaaz/androwarn|
 |[REF-15]|Firebase Security Rules Documentation|firebase.google.com/docs/rules|
@@ -248,7 +246,6 @@ text
       │
       ├──── Web Browser ────────► [ Next.js Dashboard ] ◄──► [ Convex BaaS ]
       │                                                              │
-      ├──── Telegram Client ────► [ Telegram Bot ]                  │
       │                                                              ▼
       └──── Filesystem Drop ────► [ Chokidar Watcher ]     [ Worker Process ]
                                                                      │
@@ -268,7 +265,6 @@ The system interfaces with:
 - **Frida** for dynamic runtime instrumentation.
 - **Androwarn** for static behavioral risk assessment.
 - **Ollama** (hosting MiniMax M2.7) for AI-powered triage and report generation.
-- **Telegram Bot API** for document-based APK submission.
 - **Puppeteer** for headless Chromium-based PDF generation.
 - **Android Emulator (AVD/BrutDroid)** for dynamic analysis runtime.
 
@@ -280,7 +276,6 @@ At the highest level, Shinodroid provides the following primary functions:
 
 |Function ID|Function Name|Description|
 |---|---|---|
-|F-01|**APK Ingestion**|Accept APK files from web dashboard, Telegram bot, or folder-drop. Validate file type, size, and integrity.|
 |F-02|**Scan Lifecycle Management**|Create, track, and update scan records through defined states: `pending → scanning → completed / failed`.|
 |F-03|**Multi-Engine Pipeline Orchestration**|Discover and execute registered analysis engines in strict phase order with parallelism where defined.|
 |F-04|**Static Analysis**|Analyze APK binary for permissions, vulnerabilities, hardcoded secrets, and behavioral risks using MobSF, Androwarn, and Firebase Scanner.|
@@ -290,7 +285,6 @@ At the highest level, Shinodroid provides the following primary functions:
 |F-08|**Report Generation**|Generate machine-readable JSON, human-readable Markdown, and professional PDF reports per scan.|
 |F-09|**Finding Storage and Retrieval**|Persist normalized findings to Convex database with severity, OWASP mapping, and engine attribution.|
 |F-10|**Web Dashboard**|Provide a real-time, interactive 3D web dashboard for scan submission, monitoring, and report access.|
-|F-11|**Telegram Bot Integration**|Allow APK submission and status notification via Telegram messaging.|
 |F-12|**User Authentication and Authorization**|Manage user accounts, sessions, and row-level data access through Convex Auth.|
 |F-13|**Security Control Enforcement**|Enforce rate limits, file validation, SSRF prevention, and all enumerated security controls throughout the platform.|
 
@@ -303,7 +297,6 @@ Shinodroid is designed to serve the following user classes:
 ### 2.3.1 Security Analyst (Primary User)
 
 - **Technical Level:** Advanced — proficient in mobile security, Android internals, vulnerability assessment.
-- **Primary Interaction:** Web dashboard and/or Telegram bot to submit APKs, review findings, and download reports.
 - **Goals:** Rapid, automated triage of Android applications to identify exploitable vulnerabilities and map them to OWASP MASVS.
 - **Expected Frequency:** Multiple scans per day.
 
@@ -352,8 +345,6 @@ Shinodroid is designed to serve the following user classes:
 
 ### 2.4.4 Interface Constraints
 
-- **CON-11:** Telegram bot access control relies on a configurable chat ID allowlist (`TELEGRAM_ALLOWED_CHATS`). If not configured, all chats are allowed — this is a known operational risk.
-- **CON-12:** The system does not provide a public-facing REST API for programmatic APK submission in version 1.0.0; the OpenClaw plugin interface is internal only.
 
 ### 2.4.5 Security Constraints
 
@@ -384,7 +375,6 @@ Shinodroid is designed to serve the following user classes:
 |Ollama + MiniMax M2.7|Cloud|**Non-Critical**|AI report skipped; other reports still generated.|
 |Android Emulator (AVD)|Platform-Tools|**Non-Critical**|Dynamic analysis skipped; static reports still generated.|
 |Frida|16.7.19|**Non-Critical**|Dynamic instrumentation skipped.|
-|Telegram Bot API|Latest|**Non-Critical**|Telegram interface disabled; other interfaces unaffected.|
 |Puppeteer|24.40.0|**Non-Critical**|PDF generation fails; Markdown reports still saved.|
 |Androwarn|Latest|**Non-Critical**|Engine isolated failure; pipeline continues.|
 
@@ -423,12 +413,9 @@ The primary user interface is a Next.js 16.1.6 / React 19.2.3 web application se
 - Real-time updates must propagate within 2 seconds of backend state change via Convex subscriptions.
 - 3D visualizations must degrade gracefully on browsers without WebGL support.
 
-#### 3.1.1.2 Telegram Bot Interface
 
-- Users interact via the Telegram messaging application.
 - APK files are submitted as document attachments to the bot.
 - The bot responds with scan initiation confirmation, status updates, and report download links.
-- Access is controlled via `TELEGRAM_ALLOWED_CHATS` environment variable.
 
 #### 3.1.1.3 Folder-Drop Interface
 
@@ -458,7 +445,6 @@ The primary user interface is a Next.js 16.1.6 / React 19.2.3 web application se
 |**Ollama**|REST API (HTTP JSON)|LLM inference requests to MiniMax M2.7 model|—|
 |**Frida**|frida-tools CLI + Python API|Android runtime instrumentation|16.7.19|
 |**ADB**|CLI (`adb` binary)|APK installation, logcat capture, device communication|SDK Platform-Tools|
-|**Telegram Bot API**|HTTPS REST (node-telegram-bot-api)|APK document reception, status messaging|0.67.0|
 |**Puppeteer**|Node.js library (headless Chromium)|Markdown-to-PDF report conversion|24.40.0 / PuppeteerCore 24.37.5|
 |**Androwarn**|CLI (Python subprocess)|Static behavioral analysis|Latest|
 |**Docker Engine**|Docker Daemon API|Container lifecycle management (production)|—|
@@ -477,7 +463,6 @@ The primary user interface is a Next.js 16.1.6 / React 19.2.3 web application se
 |Worker ↔ ADB|TCP|5037|Worker→ADB|Loopback only; firewalled externally|
 |ADB ↔ Emulator|TCP|5554–5585|Bidirectional|Loopback only; firewalled externally|
 |Frida ↔ Emulator|TCP|27042|Worker→Emulator|Loopback only; firewalled externally|
-|Telegram Client ↔ Bot|HTTPS|443|Bidirectional|TLS (Telegram-enforced)|
 |Docker Services ↔ Docker Services|Bridge Network|Internal|Bidirectional|Docker network isolation|
 
 ---
@@ -511,12 +496,7 @@ Requirements are organized by functional area. Each requirement includes: **ID*
 |Field|Detail|
 |---|---|
 |**ID**|FR-002|
-|**Name**|Telegram APK Submission|
 |**Priority**|S|
-|**Description**|The system shall allow users to submit APK files for analysis by uploading them as document attachments to the Shinodroid Telegram bot.|
-|**Input**|Telegram document message containing APK file; sending user's chat ID|
-|**Processing**|1. Receive document update from Telegram API. 2. Validate sender chat ID against `TELEGRAM_ALLOWED_CHATS` allowlist. 3. Validate file extension (`.apk`). 4. Download file via Telegram Bot API. 5. Validate ZIP magic bytes (`PK\x03\x04`). 6. Validate file size ≤ 100 MB. 7. Submit to scan pipeline. 8. Reply with confirmation message.|
-|**Output**|Scan initiated; Telegram confirmation message sent to user.|
 
 ---
 
@@ -1125,12 +1105,8 @@ Requirements are organized by functional area. Each requirement includes: **ID*
 |Field|Detail|
 |---|---|
 |**ID**|FR-043|
-|**Name**|OpenClaw Plugin Interface|
 |**Priority**|C|
-|**Description**|The system shall expose 7 registered OpenClaw plugin tools for MobSF interaction: `mobsf_upload`, `mobsf_scan`, `mobsf_report`, `mobsf_scans`, `mobsf_pdf`, `mobsf_scorecard`, `mobsf_auto_scan`.|
-|**Input**|OpenClaw tool invocation with parameters|
 |**Processing**|Each tool function maps to corresponding MobSF REST API call. Returns structured JSON response.|
-|**Output**|MobSF operation result returned to OpenClaw caller.|
 
 ---
 
@@ -1602,21 +1578,6 @@ _`CONFIDENTIAL — WORMHOLE Security | Shinodroid SRS v1.0.0`_
 
 ---
 
-## UC-004: Submit APK via Telegram Bot
-
-|Field|Detail|
-|---|---|
-|**UC-ID**|UC-004|
-|**Name**|Submit APK via Telegram Bot|
-|**Actor**|Security Analyst (Telegram user)|
-|**Preconditions**|1. `TELEGRAM_BOT_TOKEN` is configured. 2. Telegram bot is running. 3. User's chat ID is in `TELEGRAM_ALLOWED_CHATS` (or allowlist is not configured).|
-|**Main Flow**|1. User opens Telegram and starts a conversation with the Shinodroid bot. 2. User sends an APK file as a document attachment. 3. Bot receives `document` update from Telegram API. 4. Bot validates sender's `chat_id` against allowlist. 5. Bot validates file extension (`.apk`). 6. Bot downloads file via Telegram Bot API. 7. Bot validates ZIP magic bytes and file size. 8. Bot submits APK to scan pipeline. 9. Bot replies: "✅ Scan initiated! Scan ID: [id]. I'll notify you when complete." 10. Upon scan completion, bot sends follow-up message with scan summary and report link.|
-|**Alternative Flows**|**AF-1 (Unauthorized chat):** At step 4, if chat ID not in allowlist, bot replies "❌ Unauthorized. This bot is restricted." No scan initiated. **AF-2 (Not an APK):** At step 5, bot replies "❌ Please send an .apk file." **AF-3 (File too large):** Bot replies "❌ File exceeds 100MB limit."|
-|**Postconditions**|Scan record created; user notified via Telegram on completion.|
-|**Exceptions**|**EX-1 (Telegram API unavailable):** Bot polling fails; queued messages processed on recovery.|
-
----
-
 ## UC-005: Automated Folder-Drop Scan
 
 |Field|Detail|
@@ -1691,13 +1652,11 @@ mermaid
 graph TB
     subgraph "Client Layer"
         WB[Web Browser]
-        TG[Telegram Client]
         FS[Filesystem / CI-CD]
     end
 
     subgraph "Interface Layer"
         NEXT["Next.js Dashboard\n(shinodroid-web :3000)"]
-        BOT["Telegram Bot\n(node-telegram-bot-api)"]
         WATCH["File Watcher\n(chokidar 4.0.0)"]
     end
 
@@ -1871,7 +1830,6 @@ graph TB
         end
     end
 
-    EXT_USR["External Users\n(Browser / Telegram)"] -->|":3000 (exposed)"| WEB
     WEB -->|"Convex SDK"| CONVEX_CLOUD["Convex Cloud\n(External)"]
     WRKR -->|"Convex SDK"| CONVEX_CLOUD
     WRKR -->|"HTTP :8000 (internal)"| MOBSF_C
@@ -1924,7 +1882,6 @@ mermaid
 graph LR
     ANALYST(["Security Analyst"])
     CICD(["CI/CD System"])
-    TELEGRAM_USER(["Telegram User"])
     EXEC(["Executive"])
 
     subgraph "SHINODROID SYSTEM"
@@ -1933,11 +1890,9 @@ graph LR
 
     ANALYST -->|"APK File\nvia Web Dashboard"| SYSTEM
     CICD -->|"APK File\nvia Folder Drop"| SYSTEM
-    TELEGRAM_USER -->|"APK File\nvia Telegram Bot"| SYSTEM
 
     SYSTEM -->|"PDF Security Reports\n(Static, Dynamic, AI)"| ANALYST
     SYSTEM -->|"Security Findings\n(JSON, Web UI)"| ANALYST
-    SYSTEM -->|"Report Summary\nTelegram Message"| TELEGRAM_USER
     SYSTEM -->|"Executive PDF Report\nVia Dashboard"| EXEC
     SYSTEM -->|"JSON Findings\nReport Artifacts"| CICD
 
@@ -1954,7 +1909,6 @@ mermaid
 graph TD
     %% External Entities
     UA(["User / Analyst"])
-    TGA(["Telegram User"])
     FSA(["Filesystem / CI-CD"])
 
     %% Processes
@@ -1979,7 +1933,6 @@ graph TD
     ES1["MobSF API\n:8000"]
     ES2["Ollama API\n:11434"]
     ES3["Android Emulator\n+ADB"]
-    ES4["Telegram API"]
 
     %% Flows
     UA -->|"APK file, credentials"| P1
@@ -2035,7 +1988,6 @@ The following matrix maps functional requirements (FR-001–FR-046) to the use c
 |Requirement ID|Requirement Name|UC-001|UC-002|UC-003|UC-004|UC-005|UC-006|UC-007|UC-008|
 |---|---|---|---|---|---|---|---|---|---|
 |FR-001|Web APK Upload|✅||||||||
-|FR-002|Telegram APK Submission||||✅|||||
 |FR-003|Folder-Drop APK Ingestion|||||✅||||
 |FR-004|File Type Validation|✅|||✅|✅||||
 |FR-005|File Size Validation|✅|||✅|✅||||
@@ -2076,7 +2028,6 @@ The following matrix maps functional requirements (FR-001–FR-046) to the use c
 |FR-040|Real-Time Scan Status Dashboard||✅|||||||
 |FR-041|3D Visualization Landing Page|||||||||
 |FR-042|Finding Detail View||||||✅|||
-|FR-043|OpenClaw Plugin Interface|||||||||
 |FR-044|JSON Report Generation|||✅||✅||||
 |FR-045|Dynamic Analysis JSON Report|||✅||||✅||
 |FR-046|OWASP MASVS Compliance Mapping||||||✅||✅|
@@ -2188,7 +2139,6 @@ _`CONFIDENTIAL — WORMHOLE Security | Shinodroid SRS v1.0.0`_
 |OI-001|Phase 3 (Network Analysis) engines — mitmproxy and Nuclei — are placeholders. Full specification pending.|High|2.0.0|
 |OI-002|Phase 4 (SCA) engines — Dependency-Check and Syft — are placeholders. Full specification pending.|High|2.0.0|
 |OI-003|Public REST API for programmatic APK submission (CI/CD integration beyond folder-drop).|Medium|2.0.0|
-|OI-004|Telegram access control (`TELEGRAM_ALLOWED_CHATS`) is optional — default allow-all is an operational security risk that should be resolved.|High|1.1.0|
 |OI-005|AVD/Emulator auto-provisioning via BrutDroid integration (currently requires pre-started emulator).|Medium|2.0.0|
 |OI-006|Finding export (CSV, SARIF) from dashboard for integration with vulnerability management platforms (Jira, DefectDojo).|Medium|2.0.0|
 |OI-007|Multi-tenant organizational accounts with team-level scan sharing and access control.|Low|3.0.0|

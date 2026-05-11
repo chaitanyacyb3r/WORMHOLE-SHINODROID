@@ -4,7 +4,6 @@
 #
 # Blocks external access to ALL security-sensitive ports:
 #   - 8000  (MobSF)
-#   - 18789 (OpenClaw Gateway)
 #   - 3000  (Next.js Dashboard)
 #   - 5037  (ADB Server)
 #   - 27042 (Frida Server)
@@ -13,7 +12,6 @@
 
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host "  Firewall Hardening - WORMHOLE // Shinodroid" -ForegroundColor Cyan
-Write-Host "  Covering: MobSF, OpenClaw, Next.js, ADB, Frida" -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -29,7 +27,6 @@ if (-not $isAdmin) {
 # ── Port definitions ────────────────────────────────────────
 $rules = @(
     @{ Name = "MobSF";          Port = "8000";      Desc = "MobSF Static Analysis Server" },
-    @{ Name = "OpenClaw";       Port = "18789";     Desc = "OpenClaw Gateway (1-click RCE vector)" },
     @{ Name = "NextJS";         Port = "3000";      Desc = "Shinodroid Dashboard" },
     @{ Name = "ADB";            Port = "5037";      Desc = "ADB Server (device control)" },
     @{ Name = "Frida";          Port = "27042";     Desc = "Frida Server (code injection)" },

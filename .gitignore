@@ -15,11 +15,6 @@
 *.jks
 _key.txt
 
-# ── OpenClaw secrets ────────────────────────────
-.openclaw/
-openclaw.json
-openclaw-secrets.env
-
 # ── Node.js ────────────────────────────────────
 node_modules/
 npm-debug.log*

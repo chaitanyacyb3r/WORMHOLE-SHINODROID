@@ -605,8 +605,6 @@ There was an error while loading. [Please reload this page](https://github.com/s
 - 
 
 
-
-
         Other
         0.1%
 
@@ -647,12 +645,10 @@ There was an error while loading. [Please reload this page](https://github.com/s
        Manage cookies
 
 
-
 - 
 
 
       Do not share my personal information
-
 
 
 [Terms](https://docs.github.com/site-policy/github-terms/github-terms-of-service)

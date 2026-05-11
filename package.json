@@ -4,10 +4,10 @@
   "description": "WORMHOLE // Shinodroid 忍ドロイド — Automated Android pentesting pipeline (MobSF + Frida + BrutDroid)",
   "type": "module",
   "private": true,
-  "main": "watcher.mjs",
+  "main": "src/daemon.mjs",
   "scripts": {
-    "start": "node watcher.mjs",
-    "watch": "node watcher.mjs"
+    "start": "node src/daemon.mjs",
+    "watch": "node src/daemon.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -19,7 +19,6 @@
     "chokidar": "^4.0.0",
     "convex": "^1.32.0",
     "dotenv": "^16.6.1",
-    "node-telegram-bot-api": "^0.67.0",
     "pdfkit": "^0.17.2",
     "puppeteer-core": "^24.37.5"
   },

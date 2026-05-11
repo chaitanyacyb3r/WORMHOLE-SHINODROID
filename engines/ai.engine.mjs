@@ -147,17 +147,14 @@ pie title Findings by Analysis Engine
 ${Object.entries(engCounts).map(([eng, cnt]) => `    "${eng} (${cnt})" : ${cnt}`).join("\n")}
 \`\`\``;
 
-    // 3. Category breakdown (xychart)
+    // 3. Category breakdown (Pie Chart to prevent label overlapping)
     const topCats = Object.entries(catCounts)
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 8);
+        .slice(0, 6);
 
     const categoryChart = `\`\`\`mermaid
-xychart-beta
-    title "Findings by Category"
-    x-axis [${topCats.map(([cat]) => `"${cat.substring(0, 20)}"`).join(", ")}]
-    y-axis "Count" 0 --> ${Math.max(...topCats.map(([, c]) => c)) + 2}
-    bar [${topCats.map(([, c]) => c).join(", ")}]
+pie title Findings by Category
+${topCats.map(([cat, cnt]) => `    "${cat.substring(0, 30).replace(/"/g, "'")}${cat.length > 30 ? '...' : ''} (${cnt})" : ${cnt}`).join("\n")}
 \`\`\``;
 
     // 4. Scan pipeline flow diagram

@@ -7,7 +7,7 @@
 #   3. Frida server on emulator
 #   4. Convex dev server
 #   5. Next.js dev server
-#   6. Scan worker (node watcher.mjs)
+#   6. Scan worker (npm run start)
 #
 # With -Docker flag: Uses Docker Compose instead of local services.
 #
@@ -34,11 +34,8 @@ Write-Host "  =  SDK-Aware Dynamic Analysis Setup      =" -ForegroundColor Magen
 Write-Host "  ==========================================" -ForegroundColor Magenta
 Write-Host ""
 
-$openclawPath = Split-Path -Parent $PSScriptRoot
-if (-not (Test-Path "$openclawPath\docker-compose.yml")) {
     $openclawPath = "C:\Users\elliot\Documents\OPENCLAW-SECURITY-INTEGRITY"
 }
-$webPath   = Join-Path $openclawPath "web"
 $mobsfPath = "C:\Users\elliot\Documents\Mobile-Security-Framework-MobSF"
 
 if ($Docker) {
@@ -64,7 +61,6 @@ if ($Docker) {
     }
     Write-Host "  [OK] Docker Desktop is running" -ForegroundColor Green
 
-    Push-Location $openclawPath
     Write-Host "  [--] Building and starting containers..." -ForegroundColor Gray
     docker compose up -d 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
@@ -310,7 +306,6 @@ $devices2 = cmd /c "adb devices 2>&1"
 $connected = $devices2 | Select-String "device$"
 
 if ($connected) {
-    $setupScript = Join-Path $openclawPath "setup-emulator.ps1"
     if (Test-Path $setupScript) {
         Write-Host "  [--] Installing Frida server on emulator..." -ForegroundColor Gray
         & $setupScript
@@ -441,6 +436,5 @@ if (-not $Docker) {
     Write-Host "  ==========================================" -ForegroundColor Cyan
     Write-Host ""
 
-    Set-Location $openclawPath
-    node supabase-worker.mjs
+    npm run start
 }

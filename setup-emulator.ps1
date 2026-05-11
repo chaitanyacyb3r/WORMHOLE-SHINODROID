@@ -126,29 +126,41 @@ if ($fridaExists -match "frida-server" -and $fridaExists -notmatch "No such file
     # Detect architecture
     Write-Host "  [--] Detecting emulator architecture..." -ForegroundColor Yellow
     $arch = (cmd /c "adb shell getprop ro.product.cpu.abi 2>&1").Trim()
+    
+    if ($arch -match "more than one device") {
+        Write-Host "  [FAIL] Multiple Android Emulators detected!" -ForegroundColor Red
+        Write-Host "         Please close other emulators or run 'adb kill-server'." -ForegroundColor Gray
+        exit 1
+    }
+
     Write-Host "  [OK] Architecture: $arch" -ForegroundColor Green
 
     # Download matching frida-server
     $downloadUrl = "https://github.com/frida/frida/releases/download/$fridaVersion/frida-server-$fridaVersion-android-$arch.xz"
-    $xzFile = Join-Path $env:TEMP "frida-server-$fridaVersion.xz"
-    $serverFile = Join-Path $env:TEMP "frida-server"
+    $xzFile = Join-Path $env:TEMP "frida-server-$fridaVersion-$arch.xz"
+    $serverFile = Join-Path $env:TEMP "frida-server-$arch"
 
-    Write-Host "  [--] Downloading frida-server $fridaVersion for $arch..." -ForegroundColor Yellow
-    Write-Host "       URL: $downloadUrl" -ForegroundColor Gray
+    if (Test-Path $xzFile) {
+        Write-Host "  [OK] Using cached Frida server archive from: $xzFile" -ForegroundColor Yellow
+    } else {
+        Write-Host "  [--] Downloading frida-server $fridaVersion for $arch..." -ForegroundColor Yellow
+        Write-Host "       URL: $downloadUrl" -ForegroundColor Gray
 
-    try {
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $xzFile -UseBasicParsing
-        Write-Host "  [OK] Downloaded ($([math]::Round((Get-Item $xzFile).Length / 1MB, 1)) MB)" -ForegroundColor Green
-    } catch {
-        Write-Host "  [FAIL] Download failed: $_" -ForegroundColor Red
-        Write-Host "         Try manually: https://github.com/frida/frida/releases" -ForegroundColor Yellow
-        exit 1
+        try {
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $xzFile -UseBasicParsing
+            Write-Host "  [OK] Downloaded ($([math]::Round((Get-Item $xzFile).Length / 1MB, 1)) MB)" -ForegroundColor Green
+        } catch {
+            Write-Host "  [FAIL] Download failed: $_" -ForegroundColor Red
+            Write-Host "         Try manually: $downloadUrl" -ForegroundColor Gray
+            exit 1
+        }
     }
 
     # Extract .xz using Python (available since frida-tools requires Python)
-    Write-Host "  [--] Extracting..." -ForegroundColor Yellow
+    Write-Host "  [--] Extracting frida-server..." -ForegroundColor Yellow
     python -c "import lzma; open(r'$serverFile','wb').write(lzma.open(r'$xzFile').read())"
+
     if (-not (Test-Path $serverFile)) {
         Write-Host "  [FAIL] Extraction failed" -ForegroundColor Red
         exit 1

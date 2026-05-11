@@ -10,7 +10,6 @@
 Shinodroid is a full-stack Android pentesting pipeline. You upload an APK — it runs every analysis tool automatically and produces a professional, documented security report.
 
 ```
-Upload APK (web dashboard / Telegram / folder drop)
          │
          ▼
  ┌───────────────────────────────────────────────┐
@@ -216,7 +215,6 @@ wormhole-Shinodroid/
 │
 ├── orchestrator.mjs            # Engine runner — coordinates all engines
 ├── supabase-worker.mjs         # Scan worker — polls Supabase, runs engines
-├── watcher.mjs                 # Folder-drop + Telegram bot mode
 │
 ├── .env.example                # Copy to .env and fill in your values
 ├── setup-emulator.ps1          # One-time emulator + Frida setup
@@ -238,8 +236,6 @@ wormhole-Shinodroid/
 | `SUPABASE_SERVICE_ROLE_KEY` | ✅ | Supabase service role key (worker only) |
 | `OLLAMA_BASE_URL` | Optional | Ollama URL (default: `http://127.0.0.1:11434`) |
 | `_MODEL` | Optional | Model name (default: `minimax-text-01:cloud`) |
-| `TELEGRAM_BOT_TOKEN` | Optional | Telegram bot token (disables Telegram if blank) |
-| `TELEGRAM_ALLOWED_CHATS` | Optional | Comma-separated allowed chat IDs |
 
 ---
 

@@ -23,9 +23,6 @@ function Check-Pass($msg) { Write-Host "  [PASS] $msg" -ForegroundColor Green; $
 function Check-Warn($msg) { Write-Host "  [WARN] $msg" -ForegroundColor Yellow; $script:warn++ }
 function Check-Fail($msg) { Write-Host "  [FAIL] $msg" -ForegroundColor Red; $script:fail++ }
 
-# ── 1. OpenClaw Gateway Binding ─────────────────────────────
-Write-Host "[1/8] OpenClaw Gateway Config" -ForegroundColor White
-$ocConfig = "$env:USERPROFILE\.openclaw\openclaw.json"
 if (Test-Path $ocConfig) {
     $config = Get-Content $ocConfig -Raw | ConvertFrom-Json -ErrorAction SilentlyContinue
     if ($config) {
@@ -51,7 +48,6 @@ if (Test-Path $ocConfig) {
         }
     }
 } else {
-    Check-Warn "openclaw.json not found at $ocConfig"
 }
 
 # ── 2. Tool Permissions ─────────────────────────────────────
@@ -73,7 +69,6 @@ if ($config) {
 Write-Host ""
 Write-Host "[3/8] Secret File Permissions" -ForegroundColor White
 $secretFiles = @(
-    "$env:USERPROFILE\.openclaw\openclaw.json",
     "$PSScriptRoot\.env"
 )
 foreach ($f in $secretFiles) {
@@ -114,7 +109,6 @@ foreach ($port in $dangerousPorts) {
 Write-Host ""
 Write-Host "[5/8] Firewall Rules" -ForegroundColor White
 $fwRules = netsh advfirewall firewall show rule name=all dir=in 2>$null | Out-String
-$requiredBlocks = @("MobSF", "OpenClaw", "NextJS", "ADB", "Frida", "Emulator")
 foreach ($name in $requiredBlocks) {
     if ($fwRules -match "Shinodroid-Block-$name") {
         Check-Pass "Firewall block rule exists for $name"
@@ -129,7 +123,6 @@ Write-Host "[6/8] Git Secret Protection" -ForegroundColor White
 $gitignore = "$PSScriptRoot\.gitignore"
 if (Test-Path $gitignore) {
     $content = Get-Content $gitignore -Raw
-    $patterns = @(".env", "openclaw.json", ".openclaw/")
     foreach ($p in $patterns) {
         if ($content -match [regex]::Escape($p)) {
             Check-Pass ".gitignore covers '$p'"
@@ -156,20 +149,13 @@ if (Test-Path $mobsfConfig) {
     Check-Warn "MobSF config.py not found (may use defaults)"
 }
 
-# ── 8. Telegram Bot Security ───────────────────────────────
 Write-Host ""
-Write-Host "[8/8] Telegram Bot Security" -ForegroundColor White
 if ($config) {
-    $tg = $config.channels.telegram
     if ($tg.dmPolicy -eq "pairing") {
-        Check-Pass "Telegram DM policy: pairing (requires auth code)"
     } else {
-        Check-Warn "Telegram DM policy: $($tg.dmPolicy) - consider pairing"
     }
     if ($tg.groupPolicy -eq "allowlist") {
-        Check-Pass "Telegram group policy: allowlist (restricted)"
     } else {
-        Check-Fail "Telegram group policy: $($tg.groupPolicy) - set to allowlist!"
     }
 }
 

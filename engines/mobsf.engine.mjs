@@ -1,63 +1,57 @@
 /**
  * Shinodroid — MobSF Static Analysis Engine
- *
- * Wraps the existing MobSF integration (via watcher.mjs scanFile)
- * in the standard engine interface.
- *
- * What it does:
- *   - Upload APK to MobSF → run static scan → get JSON report
- *   - Extract code_analysis findings → standardized findings
- *   - Provides: reportData, packageName, outDir, hash (via metadata)
  */
 
 import { createFinding } from "./_engine-interface.mjs";
-import { scanFile } from "../watcher.mjs";
+import { MobSfService } from "../src/services/mobsf.service.mjs";
+import { Config } from "../src/config/config.mjs";
+import { join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
 
 export default {
     name: "MobSF Static Analysis",
     type: "static",
     version: "1.0.0",
 
-    /**
-     * Check if MobSF is available.
-     * We rely on the MOBSF_API_KEY env var being set.
-     */
     async isAvailable() {
-        return !!(process.env.MOBSF_API_KEY);
+        return await MobSfService.isAlive();
     },
 
-    /**
-     * Run MobSF static analysis on an APK.
-     *
-     * @param {string} apkPath - Absolute path to APK
-     * @param {import("./_engine-interface.mjs").EngineContext} context
-     * @returns {Promise<import("./_engine-interface.mjs").EngineResult>}
-     */
     async run(apkPath, context) {
         const start = Date.now();
+        const log = context.log || console.log;
+        const notify = context.onProgress || (() => {});
 
         try {
-            // Read the APK file into a buffer (scanFile expects a buffer)
             const { readFile } = await import("node:fs/promises");
             const fileBuffer = await readFile(apkPath);
 
-            const result = await scanFile(fileBuffer, context.fileName, (msg) => {
-                context.onProgress?.(`[MobSF] ${msg}`);
-                context.log?.("info", `[MobSF] ${msg}`);
-            });
+            notify("📤 Uploading to MobSF...");
+            const uploadReq = await MobSfService.upload(fileBuffer, context.fileName);
+            const hash = uploadReq.hash;
+            log("info", `Uploaded to MobSF. Hash: ${hash}`);
 
-            if (!result.success) {
-                return {
-                    engine: "mobsf",
-                    success: false,
-                    findings: [],
-                    metadata: {},
-                    error: result.error || "MobSF scan failed",
-                    durationMs: Date.now() - start,
-                };
+            notify("🔍 Running static scan...");
+            await MobSfService.scan(hash);
+
+            notify("📋 Downloading JSON report...");
+            const reportData = await MobSfService.getJsonReport(hash);
+
+            // Determine output directory
+            const outDir = context.outDir || join(Config.REPORTS_DIR, context.scanId || hash);
+            await mkdir(outDir, { recursive: true });
+
+            // Save raw JSON
+            await writeFile(join(outDir, "report.json"), JSON.stringify(reportData, null, 2), "utf-8");
+
+            // Save PDF
+            try {
+                notify("📄 Downloading PDF report...");
+                const pdfBuffer = await MobSfService.downloadPdf(hash);
+                await writeFile(join(outDir, "report.pdf"), pdfBuffer);
+            } catch (err) {
+                log("warn", `PDF download failed: ${err.message}`);
             }
-
-            const { reportData, outDir, hash } = result;
 
             // Extract findings from code_analysis
             const findings = [];

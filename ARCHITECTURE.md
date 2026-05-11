@@ -35,8 +35,6 @@
 ### 1.2 Key Capabilities
 
 - **Drop-and-scan**: Place an APK in `C:\MobSF-Scans\inbox` → get full static + dynamic reports
-- **Telegram integration**: Upload APKs via Telegram bot → receive formatted security reports
-- **OpenClaw agent tools**: 7 registered tools for AI-assisted security workflows
 - **Graceful degradation**: If no emulator is running, dynamic analysis is skipped — static reports still generated
 
 ### 1.3 Technology Stack
@@ -48,9 +46,7 @@
 | Dynamic Analysis | Frida (frida-tools) | 16.7.19 |
 | Emulator Management | BrutDroid + Android Studio | v2.0 |
 | Device Communication | ADB (Android Debug Bridge) | SDK Platform-Tools |
-| Bot Framework | node-telegram-bot-api | ^0.67.0 |
 | File Watcher | chokidar | ^4.0.0 |
-| AI Agent Platform | OpenClaw | 2026.2.17+ |
 
 ---
 
@@ -62,13 +58,10 @@
 graph TB
     subgraph User Inputs
         A[📁 Folder Drop<br>C:\MobSF-Scans\inbox]
-        B[📱 Telegram Bot<br>@mikasahackerman_bot]
-        C[🤖 OpenClaw Agent<br>via plugin tools]
     end
 
     subgraph Watcher Service ["watcher.mjs (Node.js)"]
         D[File Watcher<br>chokidar]
-        E[Telegram Handler<br>document listener]
         F[scanFile Pipeline]
     end
 
@@ -119,7 +112,6 @@ graph LR
 
     subgraph External Services
         MOBSF[MobSF :8000]
-        TG[Telegram API]
     end
 
     subgraph Local Tools
@@ -127,8 +119,6 @@ graph LR
         FRIDA[frida CLI]
     end
 
-    subgraph OpenClaw Ecosystem
-        OC[OpenClaw Gateway :18789]
         PLUGIN[extensions/mobsf/index.mjs]
     end
 
@@ -152,7 +142,6 @@ OPENCLAW-SECURITY-INTEGRITY/
 │
 ├── watcher.mjs                 # Main service — orchestrates everything
 │   ├── Folder watcher (chokidar)
-│   ├── Telegram bot handler
 │   ├── scanFile() pipeline
 │   └── Report formatting
 │
@@ -169,14 +158,11 @@ OPENCLAW-SECURITY-INTEGRITY/
 │   └── PintooR.js              # Combined SSL + root bypass
 │
 ├── setup-emulator.ps1          # One-time emulator setup guide
-├── package.json                # Dependencies: chokidar, dotenv, telegram-bot-api
 ├── .env                        # Runtime configuration (secrets)
 ├── .env.example                # Configuration template
 └── README.md                   # User-facing documentation
 
-~/.openclaw/extensions/mobsf/   # OpenClaw plugin (separate location)
 ├── index.mjs                   # Plugin entry — registers 7 agent tools
-├── openclaw.plugin.json        # Plugin metadata + config schema
 ├── package.json                # Plugin package info
 └── skills/mobsf-scan/
     └── SKILL.md                # Agent skill instructions for MobSF workflows
@@ -189,7 +175,6 @@ graph TD
     W[watcher.mjs] -->|imports| DA[dynamic-analyzer.mjs]
     W -->|requires| CHK[chokidar]
     W -->|requires| DOT[dotenv]
-    W -->|requires| TG[node-telegram-bot-api]
     DA -->|spawns| ADB[adb CLI]
     DA -->|spawns| FRIDA[frida CLI]
     DA -->|reads| S1[scripts/SSL-BYE.js]
@@ -292,30 +277,6 @@ Each scan produces a timestamped directory under `C:\MobSF-Scans\reports\`:
         └── totalHooks: 9
 ```
 
-### 4.3 Telegram Data Flow
-
-```mermaid
-sequenceDiagram
-    participant User as Telegram User
-    participant TG as Telegram API
-    participant Bot as Bot Handler
-    participant Pipeline as scanFile()
-
-    User->>TG: Send APK as document
-    TG->>Bot: document event
-    Bot->>Bot: Validate: allowlist, extension
-    Bot->>TG: "📥 Received... ⏳ Downloading"
-    Bot->>TG: getFileLink(file_id)
-    TG-->>Bot: HTTPS download URL
-    Bot->>Bot: Download file buffer
-    Bot->>Pipeline: scanFile(buffer, fileName, onProgress)
-    Pipeline-->>Bot: {success, outDir, reportData}
-    Bot->>TG: Formatted Markdown report
-    Bot->>TG: Send report.pdf as document
-```
-
----
-
 ## 5. Control Flow
 
 ### 5.1 Application Startup
@@ -328,9 +289,6 @@ flowchart TD
     D -->|No| E[❌ SSRF protection - Exit]
     D -->|Yes| F[Create inbox + reports dirs]
     F --> G[setupFolderWatcher]
-    G --> H{TELEGRAM_BOT_TOKEN set?}
-    H -->|No| I[⚠️ Telegram disabled]
-    H -->|Yes| J[setupTelegramBot]
     J --> K[bot.getMe - verify token]
     K --> L[Register /start /help /status /scans handlers]
     L --> M[Register document upload handler]
@@ -376,7 +334,6 @@ flowchart TD
 | APK install fail | `adb install` error | Dynamic analysis fails, static continues |
 | Frida script crash | Non-zero exit code | Marked as failed, other scripts still run |
 | Frida timeout | 20s elapsed | Process killed, output captured, marked success |
-| Telegram download | Network error | Status message updated with error |
 | File validation | Bad extension/magic | Rejected before any processing |
 
 ---
@@ -393,10 +350,7 @@ flowchart TD
 | `authHeaders()` | 79 | Returns `{Authorization: MOBSF_API_KEY}` |
 | `log(level, msg)` | 85 | Timestamped console logger with emoji prefixes |
 | `scanFile(fileBuffer, fileName, onProgress)` | 100 | **Core pipeline** — upload → scan → JSON → PDF → Frida |
-| `formatTelegramReport(reportData, fileName, outDir)` | 247 | Builds MarkdownV2 report for Telegram |
-| `escMd(text)` | 320 | Escapes Telegram MarkdownV2 special characters |
 | `setupFolderWatcher()` | 327 | Configures chokidar to watch inbox directory |
-| `setupTelegramBot()` | 367 | Initializes Telegram bot with all command handlers |
 | `main()` | 570 | Startup: validate config → watch folder → start bot |
 
 **scanFile() Pipeline Steps:**
@@ -436,31 +390,6 @@ flowchart TD
 
 ---
 
-### 6.3 `extensions/mobsf/index.mjs` — OpenClaw Plugin
-
-**Lines:** 887 &nbsp;|&nbsp; **Registers:** 7 agent tools
-
-This plugin exposes MobSF capabilities as tools that the OpenClaw AI agent can invoke during conversations.
-
-| Tool Name | Purpose | Parameters |
-|-----------|---------|------------|
-| `mobsf_upload` | Upload APK/IPA to MobSF | `filePath` (absolute) |
-| `mobsf_scan` | Trigger static analysis | `hash`, `reScan?` |
-| `mobsf_report` | Get JSON report summary | `hash` |
-| `mobsf_scans` | List recent scans | `page?`, `pageSize?` |
-| `mobsf_pdf` | Download PDF report | `hash`, `outputDir?` |
-| `mobsf_scorecard` | Get security scorecard | `hash` |
-| `mobsf_auto_scan` | One-step: upload → scan → report → PDF | `filePath`, `outputDir?` |
-
-**Security hardening in plugin:**
-- URL restricted to loopback only (anti-SSRF)
-- File paths validated: absolute, no `..` traversal
-- Extensions allowlisted
-- Response bodies size-capped (10 MB)
-- API key never logged or echoed
-
----
-
 ### 6.4 Frida Scripts
 
 | Script | Lines | Bypass Methods | Source |
@@ -486,18 +415,6 @@ All requests require header: `Authorization: <MOBSF_API_KEY>`
 | `/api/v1/scans` | GET | `?page=1&page_size=10` | `{content: [...], count, num_pages}` |
 | `/api/v1/scorecard` | POST | `hash=<md5>` | Security scorecard |
 
-### 7.2 Telegram Bot Commands
-
-| Command | Handler | Description |
-|---------|---------|-------------|
-| `/start` | L378 | Welcome message + chat ID |
-| `/help` | L396 | Usage instructions |
-| `/status` | L410 | Check MobSF connection |
-| `/scans` | L426 | List 5 most recent scans |
-| *document* | L454 | Upload APK → full scan → report |
-
----
-
 ## 8. Configuration Reference
 
 ### 8.1 Environment Variables (`.env`)
@@ -508,20 +425,6 @@ All requests require header: `Authorization: <MOBSF_API_KEY>`
 | `MOBSF_URL` | ❌ | `http://127.0.0.1:8000` | MobSF server URL (must be localhost) |
 | `APK_INBOX_DIR` | ❌ | `C:\MobSF-Scans\inbox` | Watch directory for APK drops |
 | `REPORTS_OUTPUT_DIR` | ❌ | `C:\MobSF-Scans\reports` | Where reports are saved |
-| `TELEGRAM_BOT_TOKEN` | ❌ | — | Telegram bot token from @BotFather |
-| `TELEGRAM_ALLOWED_CHATS` | ❌ | *(allow all)* | Comma-separated chat IDs for access control |
-
-### 8.2 OpenClaw Configuration (`~/.openclaw/openclaw.json`)
-
-| Path | Purpose |
-|------|---------|
-| `gateway.auth.mode` | Must be `"token"` (never `"none"`) |
-| `gateway.bind` | Must be `"loopback"` |
-| `plugins.entries.mobsf.config.mobsfApiKey` | MobSF API key for agent tools |
-| `plugins.entries.mobsf.config.mobsfUrl` | MobSF URL for agent tools |
-| `channels.telegram.botToken` | Telegram bot token for OpenClaw |
-
----
 
 ## 9. Security Model
 
@@ -532,7 +435,6 @@ graph TB
     subgraph Trusted Zone ["🟢 Trusted Zone (localhost)"]
         A[watcher.mjs]
         B[MobSF :8000]
-        C[OpenClaw :18789]
         D[Ollama :11434]
     end
 
@@ -542,7 +444,6 @@ graph TB
     end
 
     subgraph External ["🔴 External (internet)"]
-        G[Telegram API]
         H[Google Gemini API]
         I[Uploaded APKs]
     end
@@ -564,7 +465,6 @@ graph TB
 | File type validation | Extension allowlist + magic bytes | ✅ Enforced |
 | Response size limits | 10-20 MB caps | ✅ Enforced |
 | Request timeouts | AbortController (2-3 min) | ✅ Enforced |
-| Telegram access control | Chat ID allowlist | ⚠️ Available but disabled |
 | Credential encryption | Plaintext in config files | ❌ Not implemented |
 | Network isolation | `bind: loopback` in gateway | ✅ Configured |
 
@@ -612,8 +512,6 @@ C:\
 │   │   ├── secret          # API key seed
 │   │   └── config.py       # MobSF user config
 │   │
-│   ├── .openclaw\           # OpenClaw home
-│   │   ├── openclaw.json   # Main config
 │   │   └── extensions\mobsf\  # MobSF plugin
 │   │
 │   └── Documents\
@@ -647,22 +545,12 @@ C:\
    ```
 3. Test: drop an APK → verify your script output appears in `frida-results.json`
 
-### 11.3 Adding a New OpenClaw Agent Tool
-
-1. Edit `~/.openclaw/extensions/mobsf/index.mjs`
-2. Add a new `api.registerTool({...})` block following the existing pattern
-3. Always include:
-   - Hash validation: `if (!/^[a-fA-F0-9]{32}$/.test(hash))`
-   - Error handling with `errText(err)`
-   - `safeFetch()` for all HTTP calls
-
 ### 11.4 Testing Checklist
 
 - [ ] `node --check watcher.mjs` — syntax validation
 - [ ] `node --check dynamic-analyzer.mjs` — syntax validation
 - [ ] Drop test APK in inbox → verify `report.json` + `report.pdf` created
 - [ ] If emulator running → verify `frida-results.json` created
-- [ ] Telegram: send APK via bot → verify formatted report received
 - [ ] Negative tests: wrong extension, corrupt file, MobSF offline
 
 ### 11.5 Known Limitations
@@ -671,10 +559,8 @@ C:\
 |------------|------------|
 | Frida scripts run sequentially (60s total) | Parallelization possible but may crash emulator |
 | Only one emulator supported at a time | ADB serial targeting could enable multi-device |
-| Telegram file limit is 50 MB | For larger APKs, use folder drop |
 | No IPA dynamic analysis | Frida scripts are Android-only |
 | BrutDroid is Windows-only | Linux users: manual emulator setup |
 
 ---
 
-*Document generated for the OpenClaw Security Integrity project. For questions, reach out to the project maintainer.*

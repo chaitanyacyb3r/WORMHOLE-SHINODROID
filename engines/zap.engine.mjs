@@ -160,20 +160,20 @@ async function configureScanPolicy(level, log) {
         switch (level) {
             case "light":
                 // Only high-confidence, fast checks
-                await zapFetch("/JSON/ascan/action/setOptionMaxScansInUI/", { Integer: "5" });
-                await zapFetch("/JSON/ascan/action/setOptionThreadPerHost/", { Integer: "2" });
+                await zapFetch("/JSON/ascan/action/setOptionMaxScansInUI/", { Integer: "2" });
+                await zapFetch("/JSON/ascan/action/setOptionThreadPerHost/", { Integer: "1" });
                 log("info", `  Scan policy: LIGHT (fast, ~2 min)`);
                 break;
             case "full":
                 // Exhaustive testing
-                await zapFetch("/JSON/ascan/action/setOptionMaxScansInUI/", { Integer: "12" });
-                await zapFetch("/JSON/ascan/action/setOptionThreadPerHost/", { Integer: "5" });
+                await zapFetch("/JSON/ascan/action/setOptionMaxScansInUI/", { Integer: "5" });
+                await zapFetch("/JSON/ascan/action/setOptionThreadPerHost/", { Integer: "2" });
                 log("info", `  Scan policy: FULL (thorough, ~10-15 min)`);
                 break;
             default:
                 // Balanced
-                await zapFetch("/JSON/ascan/action/setOptionMaxScansInUI/", { Integer: "8" });
-                await zapFetch("/JSON/ascan/action/setOptionThreadPerHost/", { Integer: "3" });
+                await zapFetch("/JSON/ascan/action/setOptionMaxScansInUI/", { Integer: "4" });
+                await zapFetch("/JSON/ascan/action/setOptionThreadPerHost/", { Integer: "2" });
                 log("info", `  Scan policy: STANDARD (balanced, ~5 min)`);
                 break;
         }
@@ -207,6 +207,13 @@ const zapEngine = {
         const notify = context.onProgress || (() => { });
         const findings = [];
         const metadata = { alertCount: 0, spideredUrls: 0, scanLevel: "standard" };
+
+        log("info", "🧹 Wiping ZAP session state to guarantee clean run...");
+        try {
+            await zapFetch("/JSON/core/action/newSession/", { name: "shinodroid-scan", overwrite: "true" });
+        } catch (e) {
+            log("warn", `Could not wipe session: ${e.message}`);
+        }
 
         // ── Collect target URLs ──────────────────────────────────────────
         const targetUrls = new Set();
@@ -282,9 +289,10 @@ const zapEngine = {
 
                 const result = await zapFetch("/JSON/spider/action/scan/", {
                     url,
-                    maxChildren: "50",
+                    maxChildren: "10", // Prevent infinite memory ballooning
                     recurse: "true",
                     subtreeOnly: "true",
+                    maxDuration: "2", // Enforce strict 2 minute limit purely on ZAP side
                 });
 
                 if (result.scan) {
@@ -440,7 +448,7 @@ function buildDescription(alert) {
  */
 function isThirdPartyDomain(hostname) {
     const skipDomains = [
-        "google.com", "googleapis.com", "gstatic.com", "googleusercontent.com",
+        "google.com", "googleapis.com", "gstatic.com", "googleusercontent.com", "google.ch",
         "facebook.com", "fbcdn.net", "facebook.net",
         "apple.com", "icloud.com",
         "amazonaws.com", "cloudfront.net", "aws.amazon.com",
@@ -451,6 +459,9 @@ function isThirdPartyDomain(hostname) {
         "sentry.io", "bugsnag.com",
         "branch.io", "adjust.com", "appsflyer.com",
         "localhost", "127.0.0.1", "10.0.2.2",
+        "github.com", "cloudflare.com", "cloudflareinsights.com", "jsdelivr.net",
+        "yandex.com", "yandex.ru", "clarity.ms", "jwplayer.com", "jwplatform.com",
+        "googletagmanager.com", "analytics.google.com"
     ];
     return skipDomains.some(d => hostname.endsWith(d) || hostname === d);
 }

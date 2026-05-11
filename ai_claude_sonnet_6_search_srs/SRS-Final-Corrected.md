@@ -284,7 +284,6 @@ This is the first release covering the v1.0.0 feature set. Planned v2.0.0 featur
 
   
 
-Shinodroid is an automated Android application security analysis platform. It accepts Android Package Kit (APK) files submitted through three interfaces -- a web dashboard, a Telegram bot, and a watched filesystem directory -- and subjects each to a multi-phase security analysis pipeline.
 
   
 
@@ -360,7 +359,6 @@ The pipeline consists of static analysis (binary scanning, behavioral analysis, 
 
 - REF-09: Ollama REST API Specification
 
-- REF-10: Telegram Bot API Reference
 
 - REF-11: Android Debug Bridge (ADB) Command Reference
 
@@ -382,7 +380,6 @@ Shinodroid is a new, standalone product. It does not replace or extend any prede
 
   
 
-The system operates between three ingestion interfaces (web, Telegram, filesystem) and a backend analysis layer with six engine types across five phases. A Backend-as-a-Service layer provides persistence, authentication, real-time subscriptions, and file storage.
 
   
 
@@ -390,7 +387,6 @@ The system operates between three ingestion interfaces (web, Telegram, filesyste
 
   
 
-- **F-01 APK Ingestion:** The system shall accept mobile application binaries from a web dashboard, a Telegram bot, and a filesystem watcher. The system shall validate file type, size, and binary integrity before processing.
 
 - **F-02 Scan Lifecycle:** The system shall track each scan through defined states -- pending, scanning, completed, failed -- and push state changes to connected clients within 2 seconds.
 
@@ -416,7 +412,6 @@ The system operates between three ingestion interfaces (web, Telegram, filesyste
 
   
 
-**Security Analyst (Primary User):** Frequency: daily. Technical level: advanced (mobile security, Android internals). Uses web dashboard and Telegram to submit APKs, review findings, download reports. Requires OWASP MASVS mapping detail.
 
   
 
@@ -541,7 +536,6 @@ These constraints are technology mandates that limit developer choice. They are 
 
 - **Frida 16.7.19 (Non-Critical):** If unavailable, instrumentation shall be skipped.
 
-- **Telegram Bot API (Non-Critical):** If unavailable, the bot interface shall be disabled. Web and folder-drop shall be unaffected.
 
   
 
@@ -589,14 +583,6 @@ The system shall provide a web application on port 3000 as the primary user inte
 
   
 
-### 3.1.2 Telegram Bot Interface
-
-  
-
-The system shall accept APK files as document attachments via Telegram. The system shall reply with a confirmation message within 5 seconds of receiving a valid file. The system shall send a summary message upon scan completion. Access shall be controlled via a configurable chat ID allowlist environment variable.
-
-  
-
 ### 3.1.3 Folder-Drop Interface
 
   
@@ -631,7 +617,6 @@ The system shall monitor a configurable filesystem directory for new file additi
 
 - **ADB:** The system shall invoke the `adb` CLI for APK installation and log capture.
 
-- **Telegram:** The system shall use HTTPS long-polling via a Node.js SDK wrapper.
 
 - **Androwarn:** The system shall invoke the Androwarn Python CLI as a subprocess and parse its JSON output.
 
@@ -655,7 +640,6 @@ The system shall monitor a configurable filesystem directory for new file additi
 
 - **Frida to Emulator:** TCP on port 27042. Loopback only. Blocked from external access.
 
-- **Telegram to Bot:** HTTPS on port 443. TLS enforced by Telegram.
 
   
 
@@ -697,7 +681,6 @@ Priority: Must Have. This feature is the entry point for all system workflows. T
 
   
 
-- **Stimulus:** User sends APK as Telegram document.
 
   **Response:** The system shall validate the sender and file, then reply with a confirmation message within 5 seconds.
 
@@ -723,7 +706,6 @@ Priority: Must Have. This feature is the entry point for all system workflows. T
 
   
 
-**FR-002** (S) The system shall accept APK files sent as document attachments via the Telegram bot. The system shall validate the sender's chat ID against a configurable allowlist before processing. Verification: send APK from allowed chat; receive confirmation reply.
 
   
 
@@ -1374,9 +1356,6 @@ The auth backend manages four tables: `users` (accounts), `sessions` (active ses
 
 - `REPORTS_OUTPUT_DIR` (default `C:\MobSF-Scans\reports`) -- Report output directory
 
-- `TELEGRAM_BOT_TOKEN` (optional) -- Enables Telegram bot when set
-
-- `TELEGRAM_ALLOWED_CHATS` (optional) -- Comma-separated chat ID allowlist
 
 - `POLL_INTERVAL_MS` (default `30000`) -- Worker polling interval in milliseconds
 
@@ -1516,11 +1495,9 @@ stateDiagram-v2
 
   
 
-External entities: Security Analyst (web), Telegram User (bot), CI/CD System (folder-drop), Executive (reports).
 
   
 
-The system receives APK files from all three input entities. It communicates with MobSF for static analysis, the Android Emulator for dynamic analysis, and Ollama for AI triage. It stores data in Convex and outputs PDF reports, JSON findings, and Telegram summaries to the respective consumers.
 
   
 
@@ -1544,7 +1521,6 @@ Each use case maps to its implementing functional requirements:
 
   
 
-**UC-004 (Telegram):** FR-002, 004, 005, 006, 007
 
   
 
@@ -1592,7 +1568,6 @@ Items in this list represent known gaps, deferred decisions, and planned feature
 
   
 
-- **TBD-004** The Telegram bot chat allowlist defaults to accept-all when the environment variable is unset. Risk: unauthorized users may submit APKs and consume compute resources on a security analysis platform. Mitigation: README and deployment guide shall prominently warn operators to set `TELEGRAM_ALLOWED_CHATS`. The system shall log a startup warning when the variable is unset. Target: mandatory allowlist (reject-by-default) in v1.1.0.
 
   
 
