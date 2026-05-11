@@ -62,8 +62,11 @@ services:
       - NODE_ENV=production
       # Point MobSF to the sidecar container (not localhost)
       - MOBSF_URL=http://mobsf:8000
-      # Point Ollama to the sidecar container (not localhost)
-      - OLLAMA_URL=http://ollama:11434
+      # Point Ollama to the Windows host by default to match local runs.
+      # Set DOCKER_OLLAMA_URL=http://ollama:11434 to use the sidecar container.
+      - OLLAMA_URL=${DOCKER_OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-minimax-m2.7:cloud}
+      - APK_INBOX_DIR=/app/inbox
       - REPORTS_OUTPUT_DIR=/app/reports
       # Puppeteer / Chromium flags for containerized environment
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -74,15 +77,14 @@ services:
       - ZAP_API_KEY=${ZAP_API_KEY:-shinodroid-zap-key}
       - ZAP_PROXY_URL=http://zap:8080
     volumes:
-      # Persist scan reports between restarts
-      - reports-data:/app/reports
+      # Match local workflow paths through Docker bind mounts
+      - ${APK_INBOX_DIR:-C:\MobSF-Scans\inbox}:/app/inbox
+      - ${REPORTS_OUTPUT_DIR:-C:\MobSF-Scans\reports}:/app/reports
       # Mount Convex config from web/ for the worker to read
       - ./web/.env.local:/app/web/.env.local:ro
     depends_on:
       mobsf:
         condition: service_healthy
-      ollama:
-        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "process.exit(0)"]
       interval: 60s

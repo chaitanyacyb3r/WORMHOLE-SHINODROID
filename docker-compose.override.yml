@@ -19,6 +19,9 @@ services:
       # Mount source for hot-reload
       - ./web/src:/app/src:ro
       - ./web/public:/app/public:ro
+      - ./web/convex:/app/convex:ro
+      - ./web/tsconfig.json:/app/tsconfig.json:ro
+      - ./web/next.config.ts:/app/next.config.ts:ro
     environment:
       - NODE_ENV=development
     # Disable read-only in dev (Next.js needs to write .next/)
@@ -26,11 +29,16 @@ services:
 
   worker:
     volumes:
-      # Mount engine/script source for live changes
+      # Mount source for live changes
+      - ./src:/app/src:ro
       - ./engines:/app/engines:ro
       - ./scripts:/app/scripts:ro
+      - ./reporting:/app/reporting:ro
       - ./orchestrator.mjs:/app/orchestrator.mjs:ro
-      - ./supabase-worker.mjs:/app/supabase-worker.mjs:ro
       - ./dynamic-analyzer.mjs:/app/dynamic-analyzer.mjs:ro
+      - ./generate-dynamic-pdf.mjs:/app/generate-dynamic-pdf.mjs:ro
+      - ./custom-hooks-generator.mjs:/app/custom-hooks-generator.mjs:ro
+      - ./ui-explorer.mjs:/app/ui-explorer.mjs:ro
+      - ./setup-emulator.ps1:/app/setup-emulator.ps1:ro
     environment:
       - NODE_ENV=development

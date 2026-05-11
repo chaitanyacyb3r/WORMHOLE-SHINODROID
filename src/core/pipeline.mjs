@@ -106,6 +106,12 @@ export class AnalysisPipeline {
                     dynamicReportStorageId = await ConvexService.uploadToStorage(fridaEngine.metadata.dynamicPdfPath, "application/pdf");
                 }
 
+                const aiEngine = result.engines.find(e => e.engine === "ai");
+                let aiReportStorageId = null;
+                if (aiEngine?.metadata?.pdfReportPath) {
+                    aiReportStorageId = await ConvexService.uploadToStorage(aiEngine.metadata.pdfReportPath, "application/pdf");
+                }
+
                 const reportJson = mobsfEngine?.success ? {
                     security_score: mobsfEngine.metadata?.securityScore || 0,
                     average_cvss: mobsfEngine.metadata?.averageCvss || 0,
@@ -129,6 +135,7 @@ export class AnalysisPipeline {
                     reportJson,
                     reportStorageId: reportStorageId || undefined,
                     dynamicReportStorageId: dynamicReportStorageId || undefined,
+                    aiReportStorageId: aiReportStorageId || undefined,
                 });
             }
 
