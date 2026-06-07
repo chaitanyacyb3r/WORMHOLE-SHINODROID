@@ -162,6 +162,7 @@ export const updateStatus = internalMutation({
         reportStorageId: v.optional(v.id("_storage")),
         dynamicReportStorageId: v.optional(v.id("_storage")),
         aiReportStorageId: v.optional(v.id("_storage")),
+        pocReportStorageId: v.optional(v.id("_storage")),
         completedAt: v.optional(v.number()),
     },
     handler: async (ctx, args) => {

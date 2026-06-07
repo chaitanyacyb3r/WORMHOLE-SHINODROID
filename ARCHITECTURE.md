@@ -1,6 +1,6 @@
 # 📐 ARCHITECTURE.md — WORMHOLE // Shinodroid 忍ドロイド
 
-> **Version:** 1.0.0 &nbsp;|&nbsp; **Last Updated:** 2026-02-22 &nbsp;|&nbsp; **Maintainer:** elliot
+> **Version:** 1.0.0 &nbsp;|&nbsp; **Last Updated:** 2026-02-22 &nbsp;|&nbsp; **Maintainer:** Shinodroid Team
 
 ---
 
@@ -506,7 +506,7 @@ C:\
 │           ├── report.pdf
 │           └── frida-results.json
 │
-├── Users\elliot\
+├─ Users\shinodroid\
 │   ├── .MobSF\             # MobSF data directory
 │   │   ├── db.sqlite3      # MobSF database
 │   │   ├── secret          # API key seed

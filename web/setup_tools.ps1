@@ -34,9 +34,9 @@ Write-Host "  =  SDK-Aware Dynamic Analysis Setup      =" -ForegroundColor Magen
 Write-Host "  ==========================================" -ForegroundColor Magenta
 Write-Host ""
 
-    $openclawPath = "C:\Users\elliot\Documents\OPENCLAW-SECURITY-INTEGRITY"
-}
-$mobsfPath = "C:\Users\elliot\Documents\Mobile-Security-Framework-MobSF"
+$openclawPath = "C:\OPENCLAW-SECURITY-INTEGRITY"
+
+$mobsfPath = "C:\Mobile-Security-Framework-MobSF"
 
 if ($Docker) {
     Write-Host "  Mode: DOCKER" -ForegroundColor Cyan

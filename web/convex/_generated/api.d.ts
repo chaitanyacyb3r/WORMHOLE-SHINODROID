@@ -10,6 +10,7 @@
 
 import type * as admin from "../admin.js";
 import type * as auth from "../auth.js";
+import type * as cicd from "../cicd.js";
 import type * as findings from "../findings.js";
 import type * as http from "../http.js";
 import type * as scans from "../scans.js";
@@ -25,6 +26,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   admin: typeof admin;
   auth: typeof auth;
+  cicd: typeof cicd;
   findings: typeof findings;
   http: typeof http;
   scans: typeof scans;

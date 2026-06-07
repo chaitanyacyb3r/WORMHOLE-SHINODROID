@@ -25,6 +25,7 @@
 import { createFinding } from "./_engine-interface.mjs";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { ComplianceMapper } from "../src/utils/compliance-map.mjs";
 
 // -- Configuration ------------------------------------------------------------
 
@@ -262,6 +263,14 @@ Write in professional report language. Be specific to this application, not gene
 
 function buildDetailedAnalysisPrompt(findings, batchIndex) {
     const findingDescriptions = findings.map((f, i) => {
+        const complianceInfo = f.compliance?.masvs?.length
+            ? `Pre-Mapped MASVS: ${f.compliance.masvs.map(m => m.id).join(", ")}
+Mobile Top 10: ${f.compliance.mobile_top10 || "N/A"}
+GDPR: ${f.compliance.gdpr || "N/A"}
+DPDPA 2023: ${f.compliance.dpdpa || "N/A"}
+PCI-DSS: ${f.compliance.pci_dss || "N/A"}`
+            : "Compliance: Not yet mapped";
+
         return `--- FINDING ${batchIndex + i + 1} ---
 Title: ${f.title}
 Severity: ${f.severity}
@@ -269,7 +278,8 @@ Category: ${f.category}
 Engine: ${f.engine}
 Description: ${(f.description || "").substring(0, 500)}
 Current Recommendation: ${(f.recommendation || "").substring(0, 200)}
-OWASP Category: ${f.owasp_category || "Not mapped"}`;
+OWASP Category: ${f.owasp_category || "Not mapped"}
+${complianceInfo}`;
     }).join("\n\n");
 
     return `Perform a detailed security analysis of each finding below. For EACH finding, provide:
@@ -1022,8 +1032,15 @@ export default {
             metadata.sectionsGenerated++;
             log("ok", "[AI] Remediation roadmap complete");
         }
+        // ---- Section 7: Compliance Mapping (programmatic) ----------------
+        log("info", "[AI] Generating compliance mapping (MASVS, GDPR, DPDPA, PCI-DSS)...");
+        context.onProgress?.("[AI] Building compliance mapping...");
+        const complianceSection = ComplianceMapper.buildComplianceMarkdown(sorted);
+        reportSections.push(complianceSection + "\n\n---\n\n");
+        metadata.sectionsGenerated++;
+        log("ok", "[AI] Compliance mapping complete");
 
-        // ---- Section 7: Footer ------------------------------------------
+        // ---- Section 8: Footer ------------------------------------------
         const elapsed = ((Date.now() - start) / 1000).toFixed(1);
         reportSections.push(
             `## Report Metadata\n\n` +

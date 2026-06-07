@@ -306,7 +306,7 @@ See the **"GitHub Setup"** section at the bottom of this README.
 GitHub will show you these commands — copy the HTTPS version:
 
 ```powershell
-cd C:\Users\elliot\Documents\OPENCLAW-SECURITY-INTEGRITY
+cd C:\path\to\OPENCLAW-SECURITY-INTEGRITY
 
 # If git isn't initialized yet:
 git init

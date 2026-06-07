@@ -7,6 +7,7 @@ import { Logger } from "../utils/logger.mjs";
 import { Config } from "../config/config.mjs";
 import { formatBytes, elapsed, sanitizeErrorMessage } from "../utils/helpers.mjs";
 import { ReportSanitizer } from "../utils/sanitizer.mjs";
+import { ComplianceMapper } from "../utils/compliance-map.mjs";
 
 export class AnalysisPipeline {
     /**
@@ -76,6 +77,10 @@ export class AnalysisPipeline {
             // Scope Analysis (Check for Serverless/Middleware)
             const scopeAnalysis = ReportSanitizer.analyzeScope(engineContext.endpoints);
 
+            // --- COMPLIANCE MAPPING ---
+            Logger.step("[3.6/5] Mapping findings to compliance frameworks (MASVS, GDPR, PCI-DSS)...");
+            ComplianceMapper.enrichFindings(result.findings);
+
             // Extract engine breakdown
             const counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
             const engineBreakdown = {};
@@ -112,6 +117,13 @@ export class AnalysisPipeline {
                     aiReportStorageId = await ConvexService.uploadToStorage(aiEngine.metadata.pdfReportPath, "application/pdf");
                 }
 
+                // Upload PoC report if generated
+                const pocEngine = result.engines.find(e => e.engine === "poc-generator");
+                let pocReportStorageId = null;
+                if (pocEngine?.metadata?.pocReportPath) {
+                    pocReportStorageId = await ConvexService.uploadToStorage(pocEngine.metadata.pocReportPath, "text/markdown");
+                }
+
                 const reportJson = mobsfEngine?.success ? {
                     security_score: mobsfEngine.metadata?.securityScore || 0,
                     average_cvss: mobsfEngine.metadata?.averageCvss || 0,
@@ -121,6 +133,13 @@ export class AnalysisPipeline {
                     mobsf_hash: mobsfEngine.metadata?.hash || null,
                     serverless_detected: scopeAnalysis.usesServerless,
                     serverless_providers: scopeAnalysis.serverlessProviders,
+                    // PoC generation metadata
+                    ...(pocEngine?.success && !pocEngine?.skipped ? {
+                        poc_total: pocEngine.metadata?.totalPocs || 0,
+                        poc_tier1: pocEngine.metadata?.tier1Count || 0,
+                        poc_tier2: pocEngine.metadata?.tier2Count || 0,
+                        poc_tier3: pocEngine.metadata?.tier3Count || 0,
+                    } : {}),
                 } : {};
 
                 await ConvexService.updateScanStatus({
@@ -136,6 +155,7 @@ export class AnalysisPipeline {
                     reportStorageId: reportStorageId || undefined,
                     dynamicReportStorageId: dynamicReportStorageId || undefined,
                     aiReportStorageId: aiReportStorageId || undefined,
+                    pocReportStorageId: pocReportStorageId || undefined,
                 });
             }
 

@@ -1,0 +1,49 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Example: Shinodroid Security Scan in CI/CD
+#
+# This workflow demonstrates how to automatically scan your Android APK
+# for security vulnerabilities on every push or pull request.
+#
+# Prerequisites:
+#   1. Set SHINODROID_API_KEY in your repo's Settings → Secrets → Actions
+#   2. Set SHINODROID_API_URL to your Convex deployment URL
+#   3. Make sure your Shinodroid worker is running
+# ══════════════════════════════════════════════════════════════════════════════
+
+name: Security Scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  security-scan:
+    name: Shinodroid Security Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Check out the code
+      - uses: actions/checkout@v4
+
+      # 2. Set up JDK (for building the APK)
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 3. Build the APK (adjust for your project)
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      # 4. Run Shinodroid Security Scan
+      - name: Shinodroid Security Scan
+        uses: ./.github/actions/shinodroid-scan
+        with:
+          api-key: ${{ secrets.SHINODROID_API_KEY }}
+          api-url: ${{ secrets.SHINODROID_API_URL }}
+          apk-path: app/build/outputs/apk/debug/app-debug.apk
+          fail-on: critical,high,medium    # Fail build if critical or high findings
+          timeout: 600              # Wait up to 10 minutes
+          poll-interval: 15         # Check every 15 seconds

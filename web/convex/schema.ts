@@ -36,6 +36,7 @@ export default defineSchema({
         reportStorageId: v.optional(v.id("_storage")),
         dynamicReportStorageId: v.optional(v.id("_storage")),
         aiReportStorageId: v.optional(v.id("_storage")),
+        pocReportStorageId: v.optional(v.id("_storage")),
         completedAt: v.optional(v.number()),
     })
         .index("by_userId", ["userId"])
@@ -63,4 +64,17 @@ export default defineSchema({
     })
         .index("by_scanId", ["scanId"])
         .index("by_severity", ["severityOrder"]),
+
+    // ── CI/CD API Keys ───────────────────────────────────────────
+    apiKeys: defineTable({
+        userId: v.id("users"),
+        name: v.string(),
+        key: v.string(),
+        active: v.boolean(),
+        usageCount: v.number(),
+        lastUsedAt: v.number(),
+        createdAt: v.number(),
+    })
+        .index("by_key", ["key"])
+        .index("by_userId", ["userId"]),
 });
