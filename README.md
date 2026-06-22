@@ -1,4 +1,4 @@
-# ShinobiDroid 忍ドロイド
+# ShinobiDroid
 
 > **Automated Android Security Analysis Platform**  
 > Static analysis · Dynamic instrumentation · AI-generated reports · Web dashboard
