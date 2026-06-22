@@ -79,8 +79,12 @@ cd ..
 git clone https://github.com/MobSF/Mobile-Security-Framework-MobSF.git
 cd Mobile-Security-Framework-MobSF
 
+# Create a virtual python environment and activate it
+python -m venv mobsf-venv
+mobsf-venv/Scripts/activate
+
 # Install Python deps
-pip install -r requirements.txt
+tall -r requirements.txt
 
 # Run it (keep this terminal open)
 .\run.bat
