@@ -347,4 +347,4 @@ Copy-Item .env.example .env
 
 ---
 
-*ShinobiDroid 忍ドロイド — Built for Android Security Research*
+*ShinobiDroid — Built for Android Application Security Research*
