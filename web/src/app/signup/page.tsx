@@ -83,6 +83,9 @@ export default function SignupPage() {
         flow: "signUp",
       });
       console.log("[SIGNUP] ✅ signIn returned:", JSON.stringify(result));
+      // Signup succeeded — redirect immediately to dashboard
+      hasRedirected.current = true;
+      window.location.href = "/dashboard";
     } catch (err: unknown) {
       console.error("[SIGNUP] ❌ signIn threw:", err);
       const message =

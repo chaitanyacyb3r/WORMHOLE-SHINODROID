@@ -58,6 +58,9 @@ export default function LoginPage() {
         flow: "signIn",
       });
       console.log("[LOGIN] ✅ signIn returned:", JSON.stringify(result));
+      // Login succeeded — redirect immediately to dashboard
+      hasRedirected.current = true;
+      window.location.href = "/dashboard";
     } catch (err: unknown) {
       console.error("[LOGIN] ❌ signIn threw:", err);
       const message =
