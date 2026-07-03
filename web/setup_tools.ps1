@@ -306,6 +306,7 @@ $devices2 = cmd /c "adb devices 2>&1"
 $connected = $devices2 | Select-String "device$"
 
 if ($connected) {
+    $setupScript = "..\setup-emulator.ps1"
     if (Test-Path $setupScript) {
         Write-Host "  [--] Installing Frida server on emulator..." -ForegroundColor Gray
         & $setupScript
@@ -435,6 +436,7 @@ if (-not $Docker) {
     Write-Host "  =  Press Ctrl+C to stop                  =" -ForegroundColor Cyan
     Write-Host "  ==========================================" -ForegroundColor Cyan
     Write-Host ""
-
-    npm run start
+    # Navigate up to the project root and start the scan worker
+    Set-Location ..
+    node src/daemon.mjs
 }
