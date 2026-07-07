@@ -115,6 +115,10 @@ NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 
+# Convex (real-time database & auth) — see Step 5 in SETUP_GUIDE.md
+# NEXT_PUBLIC_CONVEX_URL is auto-generated in web/.env.local by `npx convex dev`
+CONVEX_DEPLOY_KEY=your_convex_deploy_key_here
+
 # Ollama model (for AI reports)
 OLLAMA_MODEL=minimax-text-01:cloud
 ```
@@ -231,11 +235,15 @@ wormhole-Shinodroid/
 | `MOBSF_URL` | Optional | MobSF URL (default: `http://127.0.0.1:8000`) |
 | `APK_INBOX_DIR` | Optional | Folder-watch inbox (default: `C:\MobSF-Scans\inbox`) |
 | `REPORTS_OUTPUT_DIR` | Optional | Report output folder (default: `C:\MobSF-Scans\reports`) |
+| `NEXT_PUBLIC_CONVEX_URL` | ✅ (web) | Convex deployment URL — auto-generated in `web/.env.local` by `npx convex dev` |
+| `CONVEX_DEPLOY_KEY` | ✅ (worker) | Convex deploy key for the scan worker (Dashboard → Settings → Deploy Keys) |
 | `NEXT_PUBLIC_SUPABASE_URL` | ✅ | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | Supabase anon (public) key |
 | `SUPABASE_SERVICE_ROLE_KEY` | ✅ | Supabase service role key (worker only) |
-| `OLLAMA_BASE_URL` | Optional | Ollama URL (default: `http://127.0.0.1:11434`) |
-| `_MODEL` | Optional | Model name (default: `minimax-text-01:cloud`) |
+| `OLLAMA_URL` | Optional | Ollama URL (default: `http://127.0.0.1:11434`) |
+| `OLLAMA_MODEL` | Optional | Model name (default: `minimax-m2.7:cloud`) |
+| `ZAP_API_KEY` | Optional | OWASP ZAP API key (default: `shinodroid-zap-key`) |
+| `SHINODROID_ADMIN_SECRET` | Optional | Admin secret for CI/CD API key generation |
 
 ---
 

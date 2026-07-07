@@ -74,6 +74,7 @@ docker run -it --rm -p 8000:8000 opensecurity/mobile-security-framework-mobsf:la
    - `NEXT_PUBLIC_SUPABASE_URL`: Paste your new Supabase Project URL.
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Paste your new Supabase anon key.
    - `SUPABASE_SERVICE_ROLE_KEY`: Paste your new Supabase service_role key.
+   - `CONVEX_DEPLOY_KEY`: Paste the deploy key from your Convex Dashboard (see Step 4D).
    - `OLLAMA_MODEL`: Set this to the model you downloaded (e.g., `mistral`).
    - `SHINODROID_ADMIN_SECRET`: Set a secure random string for the CI/CD API.
 
@@ -106,7 +107,19 @@ npx convex dev
 ```
 - It will prompt you to log in to Convex.
 - It will ask if you want to create a new project. Select **Yes**.
+- This auto-creates `web/.env.local` with `NEXT_PUBLIC_CONVEX_URL`.
 - Keep this terminal running! It synchronizes the database schema and runs the backend functions for the web dashboard.
+
+### D. Convex Deploy Key (required for the scan worker)
+The scan worker (`src/daemon.mjs`) needs a deploy key to call internal Convex functions.
+1. Open your [Convex Dashboard](https://dashboard.convex.dev).
+2. Select your project → select the **dev** deployment.
+3. Go to **Settings** → **Deploy Keys** → **Create Deploy Key**.
+4. Name it `shinodroid-worker` and select these permissions:
+   - `deployment:functions:runInternalQueries`
+   - `deployment:functions:runInternalMutations`
+5. Click **Create**, copy the key.
+6. Paste it into the root `.env` file as `CONVEX_DEPLOY_KEY=<your_key>`.
 
 ---
 

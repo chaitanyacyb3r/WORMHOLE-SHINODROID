@@ -46,6 +46,8 @@
 | Dynamic Analysis | Frida (frida-tools) | 16.7.19 |
 | Emulator Management | BrutDroid + Android Studio | v2.0 |
 | Device Communication | ADB (Android Debug Bridge) | SDK Platform-Tools |
+| Real-time Database & Auth | Convex | Latest |
+| Storage & Backup DB | Supabase | Latest |
 | File Watcher | chokidar | ^4.0.0 |
 
 ---
@@ -425,6 +427,15 @@ All requests require header: `Authorization: <MOBSF_API_KEY>`
 | `MOBSF_URL` | ❌ | `http://127.0.0.1:8000` | MobSF server URL (must be localhost) |
 | `APK_INBOX_DIR` | ❌ | `C:\MobSF-Scans\inbox` | Watch directory for APK drops |
 | `REPORTS_OUTPUT_DIR` | ❌ | `C:\MobSF-Scans\reports` | Where reports are saved |
+| `CONVEX_DEPLOY_KEY` | ✅ (worker) | — | Convex deploy key for the scan worker to call internal functions |
+| `NEXT_PUBLIC_CONVEX_URL` | ✅ (web) | — | Convex deployment URL. Auto-generated in `web/.env.local` by `npx convex dev` |
+| `NEXT_PUBLIC_SUPABASE_URL` | ✅ | — | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | — | Supabase anonymous/public key |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | — | Supabase service role secret key |
+| `OLLAMA_URL` | ❌ | `http://127.0.0.1:11434` | Ollama LLM server URL |
+| `OLLAMA_MODEL` | ❌ | `minimax-m2.7:cloud` | Ollama model name for AI reports |
+| `ZAP_API_KEY` | ❌ | `shinodroid-zap-key` | OWASP ZAP API key |
+| `SHINODROID_ADMIN_SECRET` | ❌ | — | Admin secret for CI/CD API key generation |
 
 ## 9. Security Model
 
