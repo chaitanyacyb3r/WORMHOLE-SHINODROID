@@ -1,4 +1,4 @@
-# Shinodroid 忍ドロイド
+# Shinodroid
 
 > **Automated Android Security Analysis Platform**  
 > Static analysis · Dynamic instrumentation · AI-generated reports · Web dashboard
@@ -78,8 +78,13 @@ cd ..
 git clone https://github.com/MobSF/Mobile-Security-Framework-MobSF.git
 cd Mobile-Security-Framework-MobSF
 
+#Python Virtual Environment 
+python -m venv mobsf-venv
+mobsf-venv/Scripts/activate
+
+
 # Install Python deps
-pip install -r requirements.txt
+./setup.bat
 
 # Run it (keep this terminal open)
 .\run.bat
@@ -351,4 +356,4 @@ Copy-Item .env.example .env
 
 ---
 
-*Shinodroid 忍ドロイド — Built for Android Security Research*
+*Shinodroid — Built for Android Security Research*
