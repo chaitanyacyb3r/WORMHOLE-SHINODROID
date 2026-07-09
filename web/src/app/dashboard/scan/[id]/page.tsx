@@ -53,7 +53,10 @@ interface DynamicReport {
         totalScripts: number;
         scriptsRun: number;
         successful: number;
-        sslBypasses: number;
+        sslBypasses: number;              // backward compat — now equals confirmed only
+        sslBypassesConfirmed?: number;    // hooks that intercepted real calls
+        sslHooksUnconfirmed?: number;     // hooks installed but not invoked
+        sslNotPresent?: number;           // target classes not found
         rootBypasses: number;
         cryptoOps: number;
         networkCalls: number;
@@ -403,7 +406,13 @@ export default function ScanDetailPage() {
                                     <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                                         {dynReport?.summary && (
                                             <>
-                                                <span style={{ fontSize: "0.75rem", color: "#f97316" }}>🔓 {dynReport.summary.sslBypasses} SSL bypasses</span>
+                                                <span style={{ fontSize: "0.75rem", color: (dynReport.summary.sslBypassesConfirmed ?? dynReport.summary.sslBypasses ?? 0) > 0 ? "#ef4444" : "#10b981" }}>
+                                                    {(dynReport.summary.sslBypassesConfirmed ?? dynReport.summary.sslBypasses ?? 0) > 0 ? "🔓" : "🔒"}{" "}
+                                                    {dynReport.summary.sslBypassesConfirmed ?? dynReport.summary.sslBypasses ?? 0} confirmed SSL bypass{(dynReport.summary.sslBypassesConfirmed ?? dynReport.summary.sslBypasses ?? 0) !== 1 ? "es" : ""}
+                                                </span>
+                                                {(dynReport.summary.sslHooksUnconfirmed ?? 0) > 0 && (
+                                                    <span style={{ fontSize: "0.75rem", color: "#f59e0b", marginLeft: 8 }}>⚠️ {dynReport.summary.sslHooksUnconfirmed} unverified hook{dynReport.summary.sslHooksUnconfirmed !== 1 ? "s" : ""}</span>
+                                                )}
                                                 <span style={{ fontSize: "0.75rem", color: "#a78bfa" }}>🔑 {dynReport.summary.rootBypasses} root bypasses</span>
                                             </>
                                         )}
@@ -478,7 +487,8 @@ export default function ScanDetailPage() {
                                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: 10, marginTop: 16 }}>
                                         {[
                                             { label: "Scripts Run", value: `${dynReport.summary.scriptsRun}/${dynReport.summary.totalScripts}`, color: "#a78bfa" },
-                                            { label: "SSL Bypasses", value: dynReport.summary.sslBypasses, color: "#f97316" },
+                                            { label: "SSL Confirmed", value: dynReport.summary.sslBypassesConfirmed ?? dynReport.summary.sslBypasses ?? 0, color: "#ef4444" },
+                                            { label: "SSL Unverified", value: dynReport.summary.sslHooksUnconfirmed ?? 0, color: "#f59e0b" },
                                             { label: "Root Bypasses", value: dynReport.summary.rootBypasses, color: "#f59e0b" },
                                             { label: "Crypto Ops", value: dynReport.summary.cryptoOps || 0, color: "#c084fc" },
                                             { label: "Network Calls", value: dynReport.summary.networkCalls || 0, color: "#38bdf8" },

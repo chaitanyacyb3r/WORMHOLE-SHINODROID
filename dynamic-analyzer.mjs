@@ -27,13 +27,16 @@ const __dirname = dirname(__filename);
 const SCRIPTS_DIR = join(__dirname, "scripts");
 
 // How long to let each Frida script run before collecting output (ms)
-const FRIDA_SCRIPT_TIMEOUT = parseInt(process.env.FRIDA_TIMEOUT_MS || "45000");
+const FRIDA_SCRIPT_TIMEOUT = parseInt(process.env.FRIDA_TIMEOUT_MS || "120000");
 
 // Path to setup-emulator.ps1 (auto-launches emulator + Frida server)
 const SETUP_EMULATOR_SCRIPT = join(__dirname, "setup-emulator.ps1");
 
 // ADB command
 const ADB = "adb";
+
+// android-unpinner command
+const UNPINNER = "android-unpinner";
 
 // Target device serial — set by checkEmulator(), used by adb() to add -s flag
 let targetSerial = process.env.ANDROID_SERIAL || null;
@@ -942,6 +945,66 @@ async function ensureAppForeground(packageName) {
 // ── Output Parser ────────────────────────────────────────────────────────────
 
 /**
+ * Known-bypassable SSL pinning libraries — sourced from OWASP MSTG,
+ * Frida CodeShare, and published Android security research.
+ *
+ * When a hook installs but doesn't fire (HOOK_INSTALLED_UNCONFIRMED),
+ * we use this database to determine severity:
+ *   - Libraries with documented, proven Frida bypasses → HIGH
+ *   - Less common libraries without extensive bypass documentation → MEDIUM
+ *
+ * References:
+ *   - OWASP Mobile Security Testing Guide: MSTG-NETWORK-3, MSTG-NETWORK-4
+ *   - Frida CodeShare: https://codeshare.frida.re/
+ *   - NowSecure SSL pinning bypass research
+ */
+const KNOWN_BYPASSABLE_SSL = {
+    'okhttp3.CertificatePinner':                        { severity: 'high', source: 'OWASP MSTG-NETWORK-4, Frida CodeShare' },
+    'com.squareup.okhttp.CertificatePinner':             { severity: 'high', source: 'OWASP MSTG, legacy OkHTTP bypass documentation' },
+    'com.android.org.conscrypt.TrustManagerImpl':        { severity: 'high', source: 'Android platform, OWASP MSTG-NETWORK-4' },
+    'javax.net.ssl.SSLContext':                          { severity: 'high', source: 'Java SSL API, OWASP MSTG-NETWORK-3' },
+    'javax.net.ssl.X509TrustManager':                   { severity: 'high', source: 'Java SSL API, OWASP MSTG-NETWORK-3' },
+    'com.android.org.conscrypt.CertPinManager':          { severity: 'high', source: 'Android Conscrypt, security research' },
+    'com.android.org.conscrypt.OpenSSLSocketImpl':       { severity: 'high', source: 'Conscrypt, Android security research' },
+    'com.android.org.conscrypt.OpenSSLEngineSocketImpl': { severity: 'high', source: 'Conscrypt, Android security research' },
+    'com.datatheorem.android.trustkit.pinning.PinningTrustManager':   { severity: 'high', source: 'TrustKit documentation, OWASP MSTG' },
+    'com.datatheorem.android.trustkit.pinning.OkHostnameVerifier':    { severity: 'high', source: 'TrustKit documentation' },
+    'com.squareup.okhttp.internal.tls.OkHostnameVerifier':           { severity: 'high', source: 'OkHTTP, OWASP MSTG' },
+    'android.webkit.WebViewClient':                     { severity: 'high', source: 'Android documentation, OWASP MSTG' },
+    'appcelerator.https.PinningTrustManager':            { severity: 'medium', source: 'Limited security research' },
+    'io.fabric.sdk.android.services.network.PinningTrustManager':    { severity: 'medium', source: 'Firebase/Fabric legacy' },
+    'nl.xservices.plugins.sslCertificateChecker':        { severity: 'medium', source: 'PhoneGap/Cordova plugin' },
+    'com.worklight.wlclient.api.WLClient':              { severity: 'medium', source: 'IBM MobileFirst documentation' },
+    'com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning': { severity: 'medium', source: 'IBM WorkLight documentation' },
+    'io.netty.handler.ssl.util.FingerprintTrustManagerFactory':      { severity: 'medium', source: 'Netty documentation' },
+    'ch.boye.httpclientandroidlib.conn.ssl.AbstractVerifier':        { severity: 'medium', source: 'Third-party HTTP client' },
+    'org.apache.http.conn.ssl.AbstractVerifier':         { severity: 'medium', source: 'Apache HTTP Components' },
+    'org.chromium.net.impl.CronetEngineBuilderImpl':     { severity: 'medium', source: 'Chromium Cronet' },
+    'diefferson.http_certificate_pinning.HttpCertificatePinning':    { severity: 'medium', source: 'Flutter plugin' },
+    'com.macif.plugin.sslpinningplugin.SslPinningPlugin':            { severity: 'medium', source: 'Flutter plugin' },
+    'com.commonsware.cwac.netsecurity.conscrypt.CertPinManager':     { severity: 'medium', source: 'CWAC Netsecurity' },
+    'org.apache.cordova.CordovaWebViewClient':           { severity: 'medium', source: 'Apache Cordova' },
+    'com.worklight.androidgap.plugin.WLCertificatePinningPlugin':    { severity: 'medium', source: 'IBM WorkLight' },
+    'org.apache.harmony.xnet.provider.jsse.OpenSSLSocketImpl':       { severity: 'medium', source: 'Apache Harmony (legacy)' },
+};
+
+/** Look up known bypass severity for a class name extracted from a tag message */
+function lookupBypassSeverity(tagMessage) {
+    for (const [className, info] of Object.entries(KNOWN_BYPASSABLE_SSL)) {
+        // Check if the class name appears in the tag message (e.g., in [DIAG_OBFUSCATION] or hook name)
+        if (tagMessage.includes(className)) return info;
+    }
+    // Also match by library short name from hook names
+    if (/OkHTTPv3|okhttp3/i.test(tagMessage)) return { severity: 'high', source: 'OkHTTP3 (OWASP MSTG)' };
+    if (/TrustManager.*Android|SSLContext\.init/i.test(tagMessage)) return { severity: 'high', source: 'Android platform SSL' };
+    if (/Conscrypt|TrustManagerImpl/i.test(tagMessage)) return { severity: 'high', source: 'Android Conscrypt' };
+    if (/Trustkit/i.test(tagMessage)) return { severity: 'high', source: 'TrustKit (OWASP MSTG)' };
+    if (/Squareup|OkHostnameVerifier/i.test(tagMessage)) return { severity: 'high', source: 'OkHTTP (OWASP MSTG)' };
+    if (/WebViewClient/i.test(tagMessage)) return { severity: 'high', source: 'Android WebView' };
+    return { severity: 'medium', source: 'Unknown library — limited bypass documentation' };
+}
+
+/**
  * Parse raw Frida output lines into structured findings for the database.
  * Maps common patterns to severity/category/description.
  */
@@ -951,9 +1014,26 @@ function parseOutputToFindings(scriptResults, scanId) {
 
     const PATTERNS = [
         // ── SSL/TLS (MASVS-NETWORK) ──────────────────────────────────────
-        { re: /\[\+\].*Bypass.*ssl|\[\+\].*ssl.*bypass|\[\+\].*certificate.*pinn|\[\+\].*pinn.*bypass/i, sev: "high", cat: "SSL Pinning", title: "SSL Certificate Pinning Bypassed", rec: "Implement multi-layer certificate pinning using network security config and Conscrypt. Verify pin hashes at runtime.", owasp: "M3: Insecure Communication" },
-        { re: /\[\+\].*TrustManager|\[\+\].*checkServerTrusted|\[\+\].*SSLContext\.init/i, sev: "high", cat: "SSL Pinning", title: "Custom TrustManager Hooked", rec: "Avoid custom TrustManager implementations. Use standard SSL validation.", owasp: "M3: Insecure Communication" },
-        { re: /\[\+\].*OkHttp.*bypass|\[\+\].*okhttp.*pin/i, sev: "high", cat: "SSL Pinning", title: "OkHttp Certificate Pinning Bypassed", rec: "Upgrade OkHttp and use CertificatePinner with backup pins.", owasp: "M3: Insecure Communication" },
+        // ── SSL/TLS CONFIRMED BYPASSES ───────────────────────────────────
+        { re: /\[SSL_BYPASS_CONFIRMED\]/i, sev: "high", cat: "SSL Pinning — Confirmed", title: "SSL Pinning Bypass Confirmed", rec: "The Frida hook was invoked on a real call path — this is a confirmed bypass. Implement multi-layer certificate pinning using network security config, Conscrypt, and runtime pin hash verification.", owasp: "M3: Insecure Communication" },
+
+        // ── SSL/TLS HOOK INSTALLED BUT UNVERIFIED ────────────────────────
+        // Note: severity is dynamically adjusted by detectHookInstallations based on KNOWN_BYPASSABLE_SSL
+        { re: /\[SSL_HOOK_INSTALLED\]/i, sev: "info", cat: "SSL Pinning — Unverified", title: "SSL Hook Installed (Not Yet Verified)", rec: "A Frida hook was installed but not invoked during the monitoring window. See detectHookInstallations for severity-adjusted findings.", owasp: "M3: Insecure Communication" },
+
+        // ── SSL/TLS NOT PRESENT ──────────────────────────────────────────
+        { re: /\[SSL_NOT_PRESENT\]/i, sev: "info", cat: "SSL Pinning — Not Present", title: "SSL Pinning Mechanism Not Found", rec: "The target pinning class/method was not found. This may indicate the app does not use this library, or R8/ProGuard obfuscation renamed the class.", owasp: "M3: Insecure Communication" },
+
+        // ── SSL/TLS OBFUSCATED & NATIVE ──────────────────────────────────
+        { re: /\[DETECTED_OBFUSCATED_TRUSTMANAGER\]/i, sev: "high", cat: "SSL Pinning — Obfuscated", title: "Obfuscated TrustManager Detected", rec: "An obfuscated custom TrustManager was found. Standard Frida hooks may not work; shape-based detection is required.", owasp: "M3: Insecure Communication" },
+        { re: /\[PINNING_ACTIVE\].*Obfuscated TrustManager/i, sev: "high", cat: "SSL Pinning — Obfuscated", title: "Obfuscated TrustManager Active", rec: "An obfuscated custom TrustManager actively intercepted a connection.", owasp: "M3: Insecure Communication" },
+        { re: /\[DETECTED_NATIVE_PINNING\]/i, sev: "critical", cat: "SSL Pinning — Native", title: "Native SSL Pinning Detected (BoringSSL/OpenSSL)", rec: "The app registers a custom verify callback at the native layer (C/C++). Java-layer bypasses will fail. Requires native function hooking.", owasp: "M3: Insecure Communication" },
+        { re: /\[NATIVE_PINNING_CHECK\]/i, sev: "info", cat: "SSL Pinning — Native", title: "Native SSL Verification Executed", rec: "Observed the native SSL_get_verify_result function being called.", owasp: "M3: Insecure Communication" },
+
+        // ── Legacy [+] SSL patterns (backward compat) ────────────────────
+        { re: /\[\+\].*Bypass.*ssl|\[\+\].*ssl.*bypass|\[\+\].*certificate.*pinn|\[\+\].*pinn.*bypass/i, sev: "medium", cat: "SSL Pinning — Unverified", title: "SSL Bypass (Legacy Log — Unverified)", rec: "Detected from a legacy Frida script log format. Hook installation is indicated but runtime interception is not confirmed.", owasp: "M3: Insecure Communication" },
+        { re: /\[\+\].*TrustManager|\[\+\].*checkServerTrusted|\[\+\].*SSLContext\.init/i, sev: "medium", cat: "SSL Pinning — Unverified", title: "TrustManager Hook (Legacy Log — Unverified)", rec: "Detected from a legacy Frida script log format. Interception is not confirmed.", owasp: "M3: Insecure Communication" },
+        { re: /\[\+\].*OkHttp.*bypass|\[\+\].*okhttp.*pin/i, sev: "medium", cat: "SSL Pinning — Unverified", title: "OkHttp Hook (Legacy Log — Unverified)", rec: "Detected from a legacy Frida script log format. Interception is not confirmed.", owasp: "M3: Insecure Communication" },
 
         // ── Root Detection (MASVS-RESILIENCE) ────────────────────────────
         { re: /Bypass root check|Bypass return value for binary|Bypass.*su.*command|Bypass native fopen/i, sev: "medium", cat: "Root Detection", title: "Root Detection Bypassed", rec: "Implement multi-layer root detection including native checks, file system audits, and SafetyNet.", owasp: "M8: Code Tampering" },
@@ -1031,47 +1111,146 @@ function parseOutputToFindings(scriptResults, scanId) {
 }
 
 /**
- * Detect successful hook installations as additional findings.
- * If a bypass hook was installed (no [-] error message), that PROVES
- * the protection CAN be bypassed — even if it didn't fire during
- * the monitoring window.
+ * Detect and classify SSL hook outcomes using three-state verification.
+ *
+ * States:
+ *   BYPASS_CONFIRMED  — hook installed AND invoked on a real call (HIGH severity)
+ *   HOOK_INSTALLED     — hook installed but NOT invoked during monitoring window
+ *                        (severity from KNOWN_BYPASSABLE_SSL: HIGH for proven, MEDIUM for unproven)
+ *   NOT_PRESENT        — target class/method not found (INFO severity)
+ *
+ * Also cross-references network activity from SHINOBI-NETWORK.js to provide
+ * diagnostic context when hooks install but don't fire.
  */
 function detectHookInstallations(scriptResults, scanId) {
     const findings = [];
 
-    // SSL-BYE.js: Check if TrustManager/SSLContext hooks installed (no [-] error)
+    // ── SSL Pinning: Outcome-based verification ─────────────────────────
+    // Cross-reference [SSL_HOOK_INSTALLED] vs [SSL_BYPASS_CONFIRMED] tags.
+    // Determine severity from KNOWN_BYPASSABLE_SSL database.
     for (const r of scriptResults) {
         if (r.name !== "SSL Pinning Bypass" || !r.success) continue;
         const outputText = r.output.join("\n");
 
-        // If the script ran but the TrustManager [-] message is absent, the hook installed
-        if (!outputText.includes("[-] TrustManager (Android < 7) pinner not found")) {
+        // Collect confirmed bypasses (hooks that actually fired)
+        const confirmedSet = new Set();
+        for (const line of r.output) {
+            const m = line.match(/\[SSL_BYPASS_CONFIRMED\]\s*(.+?)(?::|$)/);
+            if (m) confirmedSet.add(m[1].trim());
+        }
+
+        // Process each installed hook
+        const installedHooks = [];
+        for (const line of r.output) {
+            const m = line.match(/\[SSL_HOOK_INSTALLED\]\s*(.+?)\s*—\s*(.+)/);
+            if (m) installedHooks.push({ hookName: m[1].trim(), detail: m[2].trim(), line });
+        }
+
+        for (const hook of installedHooks) {
+            // Check if this hook was also confirmed
+            const isConfirmed = confirmedSet.has(hook.hookName);
+
+            if (isConfirmed) {
+                findings.push({
+                    scan_id: scanId,
+                    title: `SSL Bypass Confirmed: ${hook.hookName}`,
+                    severity: "high",
+                    severity_order: 2,
+                    category: "Dynamic — SSL Pinning — Confirmed",
+                    description: `Frida Script: SSL Pinning Bypass\nHook on ${hook.detail} was installed AND invoked on a real call path. This is a confirmed, active bypass of SSL certificate pinning.`,
+                    recommendation: "Implement multi-layer certificate pinning: network security config with backup pins, OkHttp CertificatePinner, and runtime integrity checks to detect hooking frameworks.",
+                    cvss_score: null,
+                    owasp_category: "M3: Insecure Communication",
+                });
+            } else {
+                // Not confirmed — look up severity from known-bypassable database
+                const known = lookupBypassSeverity(hook.line);
+                findings.push({
+                    scan_id: scanId,
+                    title: `SSL Hook Installed (Unverified): ${hook.hookName}`,
+                    severity: known.severity,
+                    severity_order: known.severity === "high" ? 2 : 3,
+                    category: "Dynamic — SSL Pinning — Unverified",
+                    description: `Frida Script: SSL Pinning Bypass\nHook on ${hook.detail} was installed but NOT invoked during the ${FRIDA_SCRIPT_TIMEOUT / 1000}s monitoring window.\n\nThis means the bypass MAY work if the app makes a pinned HTTPS request, but no interception was observed.\n\nSeverity basis: ${known.source}`,
+                    recommendation: known.severity === "high"
+                        ? "This pinning library has documented, proven Frida bypasses (source: " + known.source + "). The hook is very likely functional but the app did not make a pinned request during testing. Consider extending the monitoring window or triggering app network activity."
+                        : "This pinning library has limited bypass documentation. The hook installed but may not be on the correct call path. Consider manual verification.",
+                    cvss_score: null,
+                    owasp_category: "M3: Insecure Communication",
+                });
+            }
+        }
+
+        // Detect NOT_PRESENT with obfuscation context
+        for (const line of r.output) {
+            const m = line.match(/\[SSL_NOT_PRESENT\]\s*(.+?)\s*—\s*(.+)/);
+            if (!m) continue;
+            const hookName = m[1].trim();
+            const className = m[2].trim();
+
+            // Check if there's a matching DIAG_OBFUSCATION line
+            const hasObfuscationHint = outputText.includes('[DIAG_OBFUSCATION] ' + className.split(' ')[0]);
+
             findings.push({
                 scan_id: scanId,
-                title: "SSL TrustManager Bypass Hook Installed",
-                severity: "high",
-                severity_order: 2,
-                category: "Dynamic — SSL Pinning",
-                description: "Frida Script: SSL Pinning Bypass\nThe custom TrustManager and SSLContext.init() hooks installed successfully. This means SSL certificate validation can be completely bypassed at runtime.",
-                recommendation: "Implement additional certificate pinning beyond TrustManager: use OkHttp CertificatePinner, network security config with backup pins, and runtime integrity checks to detect hooking frameworks.",
+                title: `SSL Pinning Not Present: ${hookName}`,
+                severity: "info",
+                severity_order: 5,
+                category: "Dynamic — SSL Pinning — Not Present",
+                description: `Frida Script: SSL Pinning Bypass\nThe target class ${className} was not found in the application.` +
+                    (hasObfuscationHint ? `\n\n⚠️ This may indicate R8/ProGuard obfuscation renamed the class. Check the app's mapping.txt for the obfuscated name. Obfuscation-proof hooking is not attempted in this scan.` : ''),
+                recommendation: "No action needed if the app does not use this pinning library. If the app does use this library but the class was renamed by obfuscation, a custom Frida script targeting the obfuscated name is required.",
                 cvss_score: null,
                 owasp_category: "M3: Insecure Communication",
             });
         }
 
-        // Check Conscrypt/TrustManagerImpl hooks
-        if (!outputText.includes("[-] Conscrypt CertPinManager pinner not found")) {
-            findings.push({
-                scan_id: scanId,
-                title: "Conscrypt CertPinManager Bypass Hook Installed",
-                severity: "high",
-                severity_order: 2,
-                category: "Dynamic — SSL Pinning",
-                description: "Frida Script: SSL Pinning Bypass\nConscrypt CertPinManager hook installed. Android system-level certificate pinning can be bypassed.",
-                recommendation: "Implement application-level pinning on top of system-level Conscrypt checks.",
-                cvss_score: null,
-                owasp_category: "M3: Insecure Communication",
-            });
+        // ── Cross-reference with network activity ────────────────────────
+        // Check SHINOBI-NETWORK.js output to distinguish "no network activity"
+        // from "network activity but hooks didn't fire" (ClassLoader mismatch)
+        if (installedHooks.length > 0 && confirmedSet.size === 0) {
+            const networkCallsObserved = scriptResults.some(sr =>
+                sr.name === "Network Monitor" && sr.output.some(l => /\[NET\]/.test(l))
+            );
+            const classLoaderMismatch = r.output.some(l => /\[DIAG_CLASSLOADER_MISMATCH\]/.test(l));
+
+            if (classLoaderMismatch) {
+                findings.push({
+                    scan_id: scanId,
+                    title: "⚠️ ClassLoader Mismatch Detected",
+                    severity: "medium",
+                    severity_order: 3,
+                    category: "Dynamic — SSL Pinning — Diagnostic",
+                    description: `SSL hooks were installed but the hooked class was found in MULTIPLE ClassLoaders. The app may be loading the pinning class from a different ClassLoader than the one Frida hooked. Check [DIAG_CLASSLOADER_MISMATCH] lines in the script output for details.`,
+                    recommendation: "Use Java.enumerateClassLoadersSync() to find the correct ClassLoader and hook the class via Java.ClassFactory.get(loader).use('className').",
+                    cvss_score: null,
+                    owasp_category: "M3: Insecure Communication",
+                });
+            } else if (!networkCallsObserved) {
+                findings.push({
+                    scan_id: scanId,
+                    title: "ℹ️ No Network Activity During Monitoring",
+                    severity: "info",
+                    severity_order: 5,
+                    category: "Dynamic — SSL Pinning — Diagnostic",
+                    description: `${installedHooks.length} SSL pinning hooks were installed but no network calls were observed during the ${FRIDA_SCRIPT_TIMEOUT / 1000}s monitoring window. The app may not have made any HTTPS requests during testing. The bypasses could not be verified.`,
+                    recommendation: "Extend the monitoring window (increase FRIDA_SCRIPT_TIMEOUT) or trigger app network activity during the scan (e.g., UI automation to navigate to a login screen).",
+                    cvss_score: null,
+                    owasp_category: "M3: Insecure Communication",
+                });
+            } else {
+                findings.push({
+                    scan_id: scanId,
+                    title: "⚠️ Network Activity Observed But Hooks Did Not Fire",
+                    severity: "medium",
+                    severity_order: 3,
+                    category: "Dynamic — SSL Pinning — Diagnostic",
+                    description: `${installedHooks.length} SSL pinning hooks were installed and network calls were observed, but no hook intercepted a real call. This may indicate the app uses a different code path, a different ClassLoader, or AOT-compiled code that bypasses the hooked method.`,
+                    recommendation: "Check [DIAG_CLASSLOADER] and [DIAG_AOT] output lines for diagnostic context. The app may need a custom Frida script targeting the actual code path.",
+                    cvss_score: null,
+                    owasp_category: "M3: Insecure Communication",
+                });
+            }
         }
     }
 
@@ -1212,9 +1391,32 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
     }
     log("info", `Package: ${packageName}`);
 
-    // 3. Install APK
-    notify("📲 Installing APK on emulator...");
-    const installResult = await installApk(apkPath);
+    // 3b. Try to patch APK with android-unpinner
+    notify("🔧 Attempting to patch APK with android-unpinner (best-effort)...");
+    let installApkPath = apkPath;
+    let unpinnerSuccess = false;
+    const expectedPatchedPath = apkPath.replace(/\.apk$/i, ".unpinned.apk");
+    
+    try {
+        await execFileAsync(UNPINNER, ["patch-apks", "--force", apkPath], { timeout: 120_000 });
+    } catch (e) {
+        // android-unpinner has a known bug on Windows where it crashes trying to print a 🎉 emoji at the very end
+        // Even if it throws, the patching might have succeeded. We will ignore the error here and just check if the file exists.
+        log("info", `android-unpinner exited with error/crash (often expected on Windows due to emoji print): ${e.message.split("\\n")[0]}`);
+    }
+
+    try {
+        await access(expectedPatchedPath); // Check if the patched file was actually created
+        installApkPath = expectedPatchedPath;
+        unpinnerSuccess = true;
+        log("ok", `Successfully patched APK with android-unpinner: ${installApkPath}`);
+    } catch (err) {
+        log("warn", "android-unpinner did not produce the patched APK, falling back to original");
+    }
+
+    // 4. Install APK
+    notify(`📲 Installing APK on emulator (${unpinnerSuccess ? "patched" : "original"})...`);
+    const installResult = await installApk(installApkPath);
     if (!installResult.success) {
         log("error", `APK install failed: ${installResult.error}`);
         return { success: false, error: `APK install failed: ${installResult.error}` };
@@ -1250,6 +1452,10 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
     const scripts = [
         // MASVS-NETWORK — SSL/TLS bypass
         { name: "SSL Pinning Bypass", file: join(SCRIPTS_DIR, "SSL-BYE.js") },
+        // MASVS-NETWORK — HTTPToolkit SSL Pinning Bypass (from android-unpinner)
+        { name: "HTTPToolkit SSL Bypass", file: join(SCRIPTS_DIR, "HTTPTOOLKIT-UNPINNER.js") },
+        // MASVS-NETWORK — Obfuscated/Native SSL Pinning Detection
+        { name: "SSL Obfuscated/Native Detection", file: join(SCRIPTS_DIR, "SSL-DETECT-OBFUSCATED.js") },
         // MASVS-RESILIENCE — Root detection
         { name: "Root Detection Bypass", file: join(SCRIPTS_DIR, "ROOTER.js") },
         // MASVS-RESILIENCE + NETWORK — Combined
@@ -1284,6 +1490,67 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
     const scriptResults = [];
     let scriptsRun = 0;
     for (const script of scripts) {
+        if (script.name === "HTTPToolkit SSL Bypass") {
+            notify(`🔬 Running: ${script.name} (via android-unpinner)...`);
+            log("info", "Executing android-unpinner for SSL pinning bypass...");
+            const output = [];
+            try {
+                // Clear logcat (ignore errors if it fails to clear some buffers)
+                try {
+                    await execFileAsync(ADB, adb("logcat", "-c"));
+                } catch (e) {
+                    log("info", "logcat -c encountered an error, but continuing...");
+                }
+                
+                // Spawn android-unpinner all
+                const child = spawn(UNPINNER, ["all", "--force", apkPath], { stdio: "pipe" });
+                
+                // Programmatically answer the prompt "Continue? [y/N]:"
+                child.stdin.write("y\n");
+                child.stdin.end();
+                
+                // Wait for the tool to finish injecting the gadget
+                await new Promise((resolve) => {
+                    let done = false;
+                    const finish = () => { if (!done) { done = true; resolve(); } };
+                    child.on("close", finish);
+                    child.on("error", finish);
+                    
+                    // Failsafe timeout in case android-unpinner hangs
+                    setTimeout(() => {
+                        try { child.kill("SIGTERM"); } catch (e) {}
+                        finish();
+                    }, 45000);
+                });
+                
+                // Wait briefly for app to fully initialize
+                await new Promise(r => setTimeout(r, 5000));
+                
+                // Run monkey to trigger HTTP requests
+                exerciseApp(packageName).catch(() => {});
+                
+                // Wait for FRIDA_SCRIPT_TIMEOUT
+                await new Promise(r => setTimeout(r, FRIDA_SCRIPT_TIMEOUT));
+                
+                // Dump logcat to capture the Gadget's console.log outputs
+                const { stdout } = await execFileAsync(ADB, adb("logcat", "-d"));
+                const relevantLines = stdout.split("\n").filter(l => 
+                    l.includes("[SSL_") || l.includes("[DIAG_") || l.includes("[!]") || l.includes("HTTPToolkit")
+                );
+                output.push(...relevantLines);
+                
+                // Force-stop the app
+                await execFileAsync(ADB, adb("shell", "am", "force-stop", packageName));
+                
+                scriptResults.push({ name: script.name, output, success: true });
+            } catch (e) {
+                log("warn", `android-unpinner execution failed: ${e.message}`);
+                scriptResults.push({ name: script.name, output: [`Error: ${e.message}`], success: false });
+            }
+            scriptsRun++;
+            continue;
+        }
+
         try { await access(script.file); }
         catch {
             log("warn", `Script not found: ${script.file} — skipping`);
@@ -1334,6 +1601,7 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
         scriptTimeout: FRIDA_SCRIPT_TIMEOUT,
         sdkInfo,
         emulatorApiLevel: emulatorApi,
+        unpinnerPatchSuccess: unpinnerSuccess,
         sdkCompatibility: sdkCompat ? {
             compatible: sdkCompat.compatible,
             optimal: sdkCompat.optimal,
@@ -1350,8 +1618,14 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
             totalScripts: scripts.length,
             scriptsRun,
             successful: scriptResults.filter(r => r.success).length,
-            sslBypasses: countFridaMatches(scriptResults, /\[\+\].*bypass.*ssl|\[\+\].*ssl.*bypass|\[\+\].*pinning.*bypass|\[\+\].*bypass.*pinn/i)
-                + dynamicFindings.filter(f => f.category?.includes("SSL Pinning")).length,
+            // Confirmed bypasses only — hooks that intercepted real calls
+            sslBypassesConfirmed: countFridaMatches(scriptResults, /\[SSL_BYPASS_CONFIRMED\]/),
+            // Hooks installed but not invoked during monitoring window
+            sslHooksUnconfirmed: countFridaMatches(scriptResults, /\[SSL_HOOK_INSTALLED\]/),
+            // Mechanisms not found in the app
+            sslNotPresent: countFridaMatches(scriptResults, /\[SSL_NOT_PRESENT\]/),
+            // Backward compat: old field now equals confirmed only (was previously inflated by double-counting)
+            sslBypasses: countFridaMatches(scriptResults, /\[SSL_BYPASS_CONFIRMED\]/),
             rootBypasses: countFridaMatches(scriptResults, /Bypass root check|Bypass return value|Bypass.*su.*command/i)
                 + dynamicFindings.filter(f => f.category?.includes("Root Detection")).length,
             cryptoOps: countFridaMatches(scriptResults, /\[CRYPTO\]/),
@@ -1360,7 +1634,7 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
             authEvents: countFridaMatches(scriptResults, /\[AUTH\]/),
             platformIssues: countFridaMatches(scriptResults, /\[PLATFORM\]/),
             resilienceBypasses: countFridaMatches(scriptResults, /\[RESILIENCE\]/),
-            totalHooks: countFridaMatches(scriptResults, /\[\+\]/),
+            totalHooks: countFridaMatches(scriptResults, /\[\+\]|\[SSL_HOOK_INSTALLED\]|\[SSL_BYPASS_CONFIRMED\]/),
             findingsExtracted: dynamicFindings.length,
         },
     };

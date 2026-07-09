@@ -153,7 +153,8 @@ export async function generateDynamicPdf(fridaResults, dynamicFindings, scanMeta
         const stats = [
             { label: "Scripts Run", value: `${summary.scriptsRun || 0}/${summary.totalScripts || 0}`, color: COLORS.accent },
             { label: "Successful", value: String(summary.successful || 0), color: COLORS.success },
-            { label: "SSL Bypasses", value: String(summary.sslBypasses || 0), color: COLORS.warning },
+            { label: "SSL Confirmed", value: String(summary.sslBypassesConfirmed || summary.sslBypasses || 0), color: COLORS.danger },
+            { label: "SSL Unverified", value: String(summary.sslHooksUnconfirmed || 0), color: COLORS.warning },
             { label: "Root Bypasses", value: String(summary.rootBypasses || 0), color: COLORS.info },
             { label: "Findings", value: String(summary.findingsExtracted || dynamicFindings.length), color: COLORS.danger },
         ];

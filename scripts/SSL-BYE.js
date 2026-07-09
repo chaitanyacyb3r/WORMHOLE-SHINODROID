@@ -11,8 +11,53 @@ setTimeout(function() {
 		console.log('[#]  Android Bypass for various Certificate Pinning methods   [#]');
 		console.log('=================================================================');
 
+		// ── Diagnostic Utilities ─────────────────────────────────────────────
+		var _diagDone = {}; // Track which classes have been diagnosed
+
+		function diagClassLoader(className, resolvedClass) {
+			if (_diagDone[className]) return;
+			_diagDone[className] = true;
+			try {
+				var resolvedLoader = resolvedClass.class.getClassLoader();
+				console.log('[DIAG_CLASSLOADER] ' + className + ' resolved from: ' + resolvedLoader);
+				Java.enumerateClassLoaders({
+					onMatch: function(loader) {
+						if (String(loader) === String(resolvedLoader)) return;
+						try {
+							loader.loadClass(className);
+							console.log('[DIAG_CLASSLOADER_MISMATCH] ' + className + ' ALSO found in: ' + loader);
+						} catch(e) { /* not in this loader */ }
+					},
+					onComplete: function() {}
+				});
+			} catch(e) {
+				console.log('[DIAG_CLASSLOADER] Could not inspect ClassLoader for ' + className + ': ' + e.message);
+			}
+		}
+
+		// AOT compilation diagnostic
+		try {
+			var VMRuntime = Java.use('dalvik.system.VMRuntime');
+			var runtime = VMRuntime.getRuntime();
+			console.log('[DIAG_AOT] VM Instruction Set: ' + runtime.vmInstructionSet());
+			console.log('[DIAG_AOT] Target SDK: ' + runtime.getTargetSdkVersion());
+		} catch(e) {
+			console.log('[DIAG_AOT] Could not query VMRuntime: ' + e.message);
+		}
+
+		// ProfileInstaller check (Baseline Profiles / AOT)
+		try {
+			var ProfileInstaller = Java.use('androidx.profileinstaller.ProfileInstaller');
+			console.log('[DIAG_AOT] ProfileInstaller class found — app uses Baseline Profiles (may have AOT-compiled hot paths)');
+		} catch(e) {
+			console.log('[DIAG_AOT] No ProfileInstaller detected — app likely not using Baseline Profiles');
+		}
+
 		var X509TrustManager = Java.use('javax.net.ssl.X509TrustManager');
+		diagClassLoader('javax.net.ssl.X509TrustManager', X509TrustManager);
+		
 		var SSLContext = Java.use('javax.net.ssl.SSLContext');
+		diagClassLoader('javax.net.ssl.SSLContext', SSLContext);
 		
 		// TrustManager (Android < 7) //
 		////////////////////////////////
@@ -34,12 +79,13 @@ setTimeout(function() {
 		try {
 			// Override the init method, specifying the custom TrustManager
 			SSLContext_init.implementation = function(keyManager, trustManager, secureRandom) {
-				console.log('[+] Bypassing Trustmanager (Android < 7) pinner');
+				console.log('[SSL_BYPASS_CONFIRMED] TrustManager (Android < 7): SSLContext.init() intercepted');
 				SSLContext_init.call(this, keyManager, TrustManagers, secureRandom);
 			};
+			console.log('[SSL_HOOK_INSTALLED] TrustManager (Android < 7) — javax.net.ssl.SSLContext.init(KeyManager[], TrustManager[], SecureRandom)');
 		} catch (err) {
-			console.log('[-] TrustManager (Android < 7) pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] TrustManager (Android < 7) — javax.net.ssl.SSLContext.init not found');
+			console.log('[DIAG_OBFUSCATION] javax.net.ssl.SSLContext: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -50,48 +96,53 @@ setTimeout(function() {
 		try {
 			// Bypass OkHTTPv3 {1}
 			var okhttp3_Activity_1 = Java.use('okhttp3.CertificatePinner');    
+			diagClassLoader('okhttp3.CertificatePinner', okhttp3_Activity_1);
 			okhttp3_Activity_1.check.overload('java.lang.String', 'java.util.List').implementation = function(a, b) {                              
-				console.log('[+] Bypassing OkHTTPv3 {1}: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] OkHTTPv3 {1}: ' + a);
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] OkHTTPv3 {1} — okhttp3.CertificatePinner.check(String, List)');
 		} catch (err) {
-			console.log('[-] OkHTTPv3 {1} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] OkHTTPv3 {1} — okhttp3.CertificatePinner not found');
+			console.log('[DIAG_OBFUSCATION] okhttp3.CertificatePinner: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass OkHTTPv3 {2}
 			// This method of CertificatePinner.check is deprecated but could be found in some old Android apps
 			var okhttp3_Activity_2 = Java.use('okhttp3.CertificatePinner');    
 			okhttp3_Activity_2.check.overload('java.lang.String', 'java.security.cert.Certificate').implementation = function(a, b) {
-				console.log('[+] Bypassing OkHTTPv3 {2}: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] OkHTTPv3 {2}: ' + a);
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] OkHTTPv3 {2} — okhttp3.CertificatePinner.check(String, Certificate)');
 		} catch (err) {
-			console.log('[-] OkHTTPv3 {2} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] OkHTTPv3 {2} — okhttp3.CertificatePinner not found');
+			console.log('[DIAG_OBFUSCATION] okhttp3.CertificatePinner: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass OkHTTPv3 {3}
 			var okhttp3_Activity_3 = Java.use('okhttp3.CertificatePinner');    
 			okhttp3_Activity_3.check.overload('java.lang.String', '[Ljava.security.cert.Certificate;').implementation = function(a, b) {
-				console.log('[+] Bypassing OkHTTPv3 {3}: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] OkHTTPv3 {3}: ' + a);
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] OkHTTPv3 {3} — okhttp3.CertificatePinner.check(String, Certificate[])');
 		} catch(err) {
-			console.log('[-] OkHTTPv3 {3} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] OkHTTPv3 {3} — okhttp3.CertificatePinner not found');
+			console.log('[DIAG_OBFUSCATION] okhttp3.CertificatePinner: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass OkHTTPv3 {4}
 			var okhttp3_Activity_4 = Java.use('okhttp3.CertificatePinner');    
 			//okhttp3_Activity_4['check$okhttp'].implementation = function(a, b) {
 			okhttp3_Activity_4.check$okhttp.overload('java.lang.String', 'kotlin.jvm.functions.Function0').implementation = function(a, b) {		
-				console.log('[+] Bypassing OkHTTPv3 {4}: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] OkHTTPv3 {4}: ' + a);
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] OkHTTPv3 {4} — okhttp3.CertificatePinner.check$okhttp(String, Function0)');
 		} catch(err) {
-			console.log('[-] OkHTTPv3 {4} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] OkHTTPv3 {4} — okhttp3.CertificatePinner not found');
+			console.log('[DIAG_OBFUSCATION] okhttp3.CertificatePinner: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 	
@@ -102,35 +153,40 @@ setTimeout(function() {
 		try {
 			// Bypass Trustkit {1}
 			var trustkit_Activity_1 = Java.use('com.datatheorem.android.trustkit.pinning.OkHostnameVerifier');
+			diagClassLoader('com.datatheorem.android.trustkit.pinning.OkHostnameVerifier', trustkit_Activity_1);
 			trustkit_Activity_1.verify.overload('java.lang.String', 'javax.net.ssl.SSLSession').implementation = function(a, b) {
-				console.log('[+] Bypassing Trustkit {1}: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] Trustkit {1}: ' + a);
 				return true;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Trustkit {1} — OkHostnameVerifier.verify(String, SSLSession)');
 		} catch (err) {
-			console.log('[-] Trustkit {1} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Trustkit {1} — com.datatheorem.android.trustkit.pinning.OkHostnameVerifier not found');
+			console.log('[DIAG_OBFUSCATION] com.datatheorem.android.trustkit.pinning.OkHostnameVerifier: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass Trustkit {2}
 			var trustkit_Activity_2 = Java.use('com.datatheorem.android.trustkit.pinning.OkHostnameVerifier');
 			trustkit_Activity_2.verify.overload('java.lang.String', 'java.security.cert.X509Certificate').implementation = function(a, b) {
-				console.log('[+] Bypassing Trustkit {2}: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] Trustkit {2}: ' + a);
 				return true;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Trustkit {2} — OkHostnameVerifier.verify(String, X509Certificate)');
 		} catch (err) {
-			console.log('[-] Trustkit {2} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Trustkit {2} — com.datatheorem.android.trustkit.pinning.OkHostnameVerifier not found');
+			console.log('[DIAG_OBFUSCATION] com.datatheorem.android.trustkit.pinning.OkHostnameVerifier: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass Trustkit {3}
 			var trustkit_PinningTrustManager = Java.use('com.datatheorem.android.trustkit.pinning.PinningTrustManager');
+			diagClassLoader('com.datatheorem.android.trustkit.pinning.PinningTrustManager', trustkit_PinningTrustManager);
 			trustkit_PinningTrustManager.checkServerTrusted.overload('[Ljava.security.cert.X509Certificate;', 'java.lang.String').implementation = function(chain, authType) {
-				console.log('[+] Bypassing Trustkit {3}');
+				console.log('[SSL_BYPASS_CONFIRMED] Trustkit {3}: PinningTrustManager.checkServerTrusted intercepted');
 				//return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Trustkit {3} — PinningTrustManager.checkServerTrusted(...)');
 		} catch (err) {
-			console.log('[-] Trustkit {3} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Trustkit {3} — com.datatheorem.android.trustkit.pinning.PinningTrustManager not found');
+			console.log('[DIAG_OBFUSCATION] com.datatheorem.android.trustkit.pinning.PinningTrustManager: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		
 	
@@ -142,24 +198,27 @@ setTimeout(function() {
 			// Bypass TrustManagerImpl (Android > 7) {1}
 			var array_list = Java.use("java.util.ArrayList");
 			var TrustManagerImpl_Activity_1 = Java.use('com.android.org.conscrypt.TrustManagerImpl');
+			diagClassLoader('com.android.org.conscrypt.TrustManagerImpl', TrustManagerImpl_Activity_1);
 			TrustManagerImpl_Activity_1.checkTrustedRecursive.implementation = function(certs, ocspData, tlsSctData, host, clientAuth, untrustedChain, trustAnchorChain, used) {
-				console.log('[+] Bypassing TrustManagerImpl (Android > 7) checkTrustedRecursive check: '+ host);
+				console.log('[SSL_BYPASS_CONFIRMED] TrustManagerImpl (Android > 7) checkTrustedRecursive: '+ host);
 				return array_list.$new();
 			};
+			console.log('[SSL_HOOK_INSTALLED] TrustManagerImpl (Android > 7) {1} — checkTrustedRecursive(...)');
 		} catch (err) {
-			console.log('[-] TrustManagerImpl (Android > 7) checkTrustedRecursive check not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] TrustManagerImpl (Android > 7) {1} — com.android.org.conscrypt.TrustManagerImpl not found');
+			console.log('[DIAG_OBFUSCATION] com.android.org.conscrypt.TrustManagerImpl: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}  
 		try {
 			// Bypass TrustManagerImpl (Android > 7) {2} (probably no more necessary)
 			var TrustManagerImpl_Activity_2 = Java.use('com.android.org.conscrypt.TrustManagerImpl');
 			TrustManagerImpl_Activity_2.verifyChain.implementation = function(untrustedChain, trustAnchorChain, host, clientAuth, ocspData, tlsSctData) {
-				console.log('[+] Bypassing TrustManagerImpl (Android > 7) verifyChain check: ' + host);
+				console.log('[SSL_BYPASS_CONFIRMED] TrustManagerImpl (Android > 7) verifyChain: ' + host);
 				return untrustedChain;
 			};   
+			console.log('[SSL_HOOK_INSTALLED] TrustManagerImpl (Android > 7) {2} — verifyChain(...)');
 		} catch (err) {
-			console.log('[-] TrustManagerImpl (Android > 7) verifyChain check not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] TrustManagerImpl (Android > 7) {2} — com.android.org.conscrypt.TrustManagerImpl not found');
+			console.log('[DIAG_OBFUSCATION] com.android.org.conscrypt.TrustManagerImpl: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
   
@@ -170,13 +229,15 @@ setTimeout(function() {
 		///////////////////////////////////////////////
 		try {
 			var appcelerator_PinningTrustManager = Java.use('appcelerator.https.PinningTrustManager');
+			diagClassLoader('appcelerator.https.PinningTrustManager', appcelerator_PinningTrustManager);
 			appcelerator_PinningTrustManager.checkServerTrusted.implementation = function(chain, authType) {
-				console.log('[+] Bypassing Appcelerator PinningTrustManager');
+				console.log('[SSL_BYPASS_CONFIRMED] Appcelerator PinningTrustManager: checkServerTrusted intercepted');
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Appcelerator PinningTrustManager — checkServerTrusted(...)');
 		} catch (err) {
-			console.log('[-] Appcelerator PinningTrustManager pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Appcelerator PinningTrustManager — appcelerator.https.PinningTrustManager not found');
+			console.log('[DIAG_OBFUSCATION] appcelerator.https.PinningTrustManager: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -186,13 +247,15 @@ setTimeout(function() {
 		////////////////////////////////
 		try {
 			var fabric_PinningTrustManager = Java.use('io.fabric.sdk.android.services.network.PinningTrustManager');
+			diagClassLoader('io.fabric.sdk.android.services.network.PinningTrustManager', fabric_PinningTrustManager);
 			fabric_PinningTrustManager.checkServerTrusted.implementation = function(chain, authType) {
-				console.log('[+] Bypassing Fabric PinningTrustManager');
+				console.log('[SSL_BYPASS_CONFIRMED] Fabric PinningTrustManager: checkServerTrusted intercepted');
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Fabric PinningTrustManager — checkServerTrusted(...)');
 		} catch (err) {
-			console.log('[-] Fabric PinningTrustManager pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Fabric PinningTrustManager — io.fabric.sdk.android.services.network.PinningTrustManager not found');
+			console.log('[DIAG_OBFUSCATION] io.fabric.sdk.android.services.network.PinningTrustManager: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -202,21 +265,24 @@ setTimeout(function() {
 		/////////////////////////////////////////////////
 		try {
 			var OpenSSLSocketImpl = Java.use('com.android.org.conscrypt.OpenSSLSocketImpl');
+			diagClassLoader('com.android.org.conscrypt.OpenSSLSocketImpl', OpenSSLSocketImpl);
 			OpenSSLSocketImpl.verifyCertificateChain.implementation = function(certRefs, JavaObject, authMethod) {
-				console.log('[+] Bypassing OpenSSLSocketImpl Conscrypt {1}');
+				console.log('[SSL_BYPASS_CONFIRMED] OpenSSLSocketImpl Conscrypt {1}: verifyCertificateChain intercepted');
 			};
+			console.log('[SSL_HOOK_INSTALLED] OpenSSLSocketImpl Conscrypt {1} — verifyCertificateChain(...)');
 		} catch (err) {
-			console.log('[-] OpenSSLSocketImpl Conscrypt {1} pinner not found');
-			//console.log(err);        
+			console.log('[SSL_NOT_PRESENT] OpenSSLSocketImpl Conscrypt {1} — com.android.org.conscrypt.OpenSSLSocketImpl not found');
+			console.log('[DIAG_OBFUSCATION] com.android.org.conscrypt.OpenSSLSocketImpl: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			var OpenSSLSocketImpl = Java.use('com.android.org.conscrypt.OpenSSLSocketImpl');
 			OpenSSLSocketImpl.verifyCertificateChain.implementation = function(certChain, authMethod) {
-				console.log('[+] Bypassing OpenSSLSocketImpl Conscrypt {2}');
+				console.log('[SSL_BYPASS_CONFIRMED] OpenSSLSocketImpl Conscrypt {2}: verifyCertificateChain intercepted');
 			};
+			console.log('[SSL_HOOK_INSTALLED] OpenSSLSocketImpl Conscrypt {2} — verifyCertificateChain(...)');
 		} catch (err) {
-			console.log('[-] OpenSSLSocketImpl Conscrypt {2} pinner not found');
-			//console.log(err);        
+			console.log('[SSL_NOT_PRESENT] OpenSSLSocketImpl Conscrypt {2} — com.android.org.conscrypt.OpenSSLSocketImpl not found');
+			console.log('[DIAG_OBFUSCATION] com.android.org.conscrypt.OpenSSLSocketImpl: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -226,12 +292,14 @@ setTimeout(function() {
 		///////////////////////////////////////
 		try {
 			var OpenSSLEngineSocketImpl_Activity = Java.use('com.android.org.conscrypt.OpenSSLEngineSocketImpl');
+			diagClassLoader('com.android.org.conscrypt.OpenSSLEngineSocketImpl', OpenSSLEngineSocketImpl_Activity);
 			OpenSSLEngineSocketImpl_Activity.verifyCertificateChain.overload('[Ljava.lang.Long;', 'java.lang.String').implementation = function(a, b) {
-				console.log('[+] Bypassing OpenSSLEngineSocketImpl Conscrypt: ' + b);
+				console.log('[SSL_BYPASS_CONFIRMED] OpenSSLEngineSocketImpl Conscrypt: ' + b);
 			};
+			console.log('[SSL_HOOK_INSTALLED] OpenSSLEngineSocketImpl Conscrypt — verifyCertificateChain(...)');
 		} catch (err) {
-			console.log('[-] OpenSSLEngineSocketImpl Conscrypt pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] OpenSSLEngineSocketImpl Conscrypt — com.android.org.conscrypt.OpenSSLEngineSocketImpl not found');
+			console.log('[DIAG_OBFUSCATION] com.android.org.conscrypt.OpenSSLEngineSocketImpl: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -241,12 +309,14 @@ setTimeout(function() {
 		//////////////////////////////////////
 		try {
 			var OpenSSLSocketImpl_Harmony = Java.use('org.apache.harmony.xnet.provider.jsse.OpenSSLSocketImpl');
+			diagClassLoader('org.apache.harmony.xnet.provider.jsse.OpenSSLSocketImpl', OpenSSLSocketImpl_Harmony);
 			OpenSSLSocketImpl_Harmony.verifyCertificateChain.implementation = function(asn1DerEncodedCertificateChain, authMethod) {
-				console.log('[+] Bypassing OpenSSLSocketImpl Apache Harmony');
+				console.log('[SSL_BYPASS_CONFIRMED] OpenSSLSocketImpl Apache Harmony: verifyCertificateChain intercepted');
 			};
+			console.log('[SSL_HOOK_INSTALLED] OpenSSLSocketImpl Apache Harmony — verifyCertificateChain(...)');
 		} catch (err) {
-			console.log('[-] OpenSSLSocketImpl Apache Harmony pinner not found');
-			//console.log(err);      
+			console.log('[SSL_NOT_PRESENT] OpenSSLSocketImpl Apache Harmony — org.apache.harmony.xnet.provider.jsse.OpenSSLSocketImpl not found');
+			console.log('[DIAG_OBFUSCATION] org.apache.harmony.xnet.provider.jsse.OpenSSLSocketImpl: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -256,13 +326,15 @@ setTimeout(function() {
 		////////////////////////////////////
 		try {
 			var phonegap_Activity = Java.use('nl.xservices.plugins.sslCertificateChecker');
+			diagClassLoader('nl.xservices.plugins.sslCertificateChecker', phonegap_Activity);
 			phonegap_Activity.execute.overload('java.lang.String', 'org.json.JSONArray', 'org.apache.cordova.CallbackContext').implementation = function(a, b, c) {
-				console.log('[+] Bypassing PhoneGap sslCertificateChecker: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] PhoneGap sslCertificateChecker: ' + a);
 				return true;
 			};
+			console.log('[SSL_HOOK_INSTALLED] PhoneGap sslCertificateChecker — execute(...)');
 		} catch (err) {
-			console.log('[-] PhoneGap sslCertificateChecker pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] PhoneGap sslCertificateChecker — nl.xservices.plugins.sslCertificateChecker not found');
+			console.log('[DIAG_OBFUSCATION] nl.xservices.plugins.sslCertificateChecker: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -273,24 +345,27 @@ setTimeout(function() {
 		try {
 			// Bypass IBM MobileFirst {1}
 			var WLClient_Activity_1 = Java.use('com.worklight.wlclient.api.WLClient');
+			diagClassLoader('com.worklight.wlclient.api.WLClient', WLClient_Activity_1);
 			WLClient_Activity_1.getInstance().pinTrustedCertificatePublicKey.overload('java.lang.String').implementation = function(cert) {
-				console.log('[+] Bypassing IBM MobileFirst pinTrustedCertificatePublicKey {1}: ' + cert);
+				console.log('[SSL_BYPASS_CONFIRMED] IBM MobileFirst {1}: ' + cert);
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] IBM MobileFirst {1} — pinTrustedCertificatePublicKey(String)');
 			} catch (err) {
-			console.log('[-] IBM MobileFirst pinTrustedCertificatePublicKey {1} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] IBM MobileFirst {1} — com.worklight.wlclient.api.WLClient not found');
+			console.log('[DIAG_OBFUSCATION] com.worklight.wlclient.api.WLClient: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass IBM MobileFirst {2}
 			var WLClient_Activity_2 = Java.use('com.worklight.wlclient.api.WLClient');
 			WLClient_Activity_2.getInstance().pinTrustedCertificatePublicKey.overload('[Ljava.lang.String;').implementation = function(cert) {
-				console.log('[+] Bypassing IBM MobileFirst pinTrustedCertificatePublicKey {2}: ' + cert);
+				console.log('[SSL_BYPASS_CONFIRMED] IBM MobileFirst {2}: ' + cert);
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] IBM MobileFirst {2} — pinTrustedCertificatePublicKey(String[])');
 		} catch (err) {
-			console.log('[-] IBM MobileFirst pinTrustedCertificatePublicKey {2} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] IBM MobileFirst {2} — com.worklight.wlclient.api.WLClient not found');
+			console.log('[DIAG_OBFUSCATION] com.worklight.wlclient.api.WLClient: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -301,46 +376,51 @@ setTimeout(function() {
 		try {
 			// Bypass IBM WorkLight {1}
 			var worklight_Activity_1 = Java.use('com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning');
+			diagClassLoader('com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning', worklight_Activity_1);
 			worklight_Activity_1.verify.overload('java.lang.String', 'javax.net.ssl.SSLSocket').implementation = function(a, b) {
-				console.log('[+] Bypassing IBM WorkLight HostNameVerifierWithCertificatePinning {1}: ' + a);                
+				console.log('[SSL_BYPASS_CONFIRMED] IBM WorkLight {1}: ' + a);                
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] IBM WorkLight {1} — verify(String, SSLSocket)');
 		} catch (err) {
-			console.log('[-] IBM WorkLight HostNameVerifierWithCertificatePinning {1} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] IBM WorkLight {1} — com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning not found');
+			console.log('[DIAG_OBFUSCATION] com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass IBM WorkLight {2}
 			var worklight_Activity_2 = Java.use('com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning');
 			worklight_Activity_2.verify.overload('java.lang.String', 'java.security.cert.X509Certificate').implementation = function(a, b) {
-				console.log('[+] Bypassing IBM WorkLight HostNameVerifierWithCertificatePinning {2}: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] IBM WorkLight {2}: ' + a);
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] IBM WorkLight {2} — verify(String, X509Certificate)');
 		} catch (err) {
-			console.log('[-] IBM WorkLight HostNameVerifierWithCertificatePinning {2} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] IBM WorkLight {2} — com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning not found');
+			console.log('[DIAG_OBFUSCATION] com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass IBM WorkLight {3}
 			var worklight_Activity_3 = Java.use('com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning');
 			worklight_Activity_3.verify.overload('java.lang.String', '[Ljava.lang.String;', '[Ljava.lang.String;').implementation = function(a, b) {
-				console.log('[+] Bypassing IBM WorkLight HostNameVerifierWithCertificatePinning {3}: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] IBM WorkLight {3}: ' + a);
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] IBM WorkLight {3} — verify(String, String[], String[])');
 		} catch (err) {
-			console.log('[-] IBM WorkLight HostNameVerifierWithCertificatePinning {3} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] IBM WorkLight {3} — com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning not found');
+			console.log('[DIAG_OBFUSCATION] com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass IBM WorkLight {4}
 			var worklight_Activity_4 = Java.use('com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning');
 			worklight_Activity_4.verify.overload('java.lang.String', 'javax.net.ssl.SSLSession').implementation = function(a, b) {
-				console.log('[+] Bypassing IBM WorkLight HostNameVerifierWithCertificatePinning {4}: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] IBM WorkLight {4}: ' + a);
 				return true;
 			};
+			console.log('[SSL_HOOK_INSTALLED] IBM WorkLight {4} — verify(String, SSLSession)');
 		} catch (err) {
-			console.log('[-] IBM WorkLight HostNameVerifierWithCertificatePinning {4} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] IBM WorkLight {4} — com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning not found');
+			console.log('[DIAG_OBFUSCATION] com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -350,14 +430,16 @@ setTimeout(function() {
 		//////////////////////////////
 		try {
 			var conscrypt_CertPinManager_Activity = Java.use('com.android.org.conscrypt.CertPinManager');
+			diagClassLoader('com.android.org.conscrypt.CertPinManager', conscrypt_CertPinManager_Activity);
 			conscrypt_CertPinManager_Activity.checkChainPinning.overload('java.lang.String', 'java.util.List').implementation = function(a, b) {
-				console.log('[+] Bypassing Conscrypt CertPinManager: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] Conscrypt CertPinManager: ' + a);
 				//return;
 				return true;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Conscrypt CertPinManager — checkChainPinning(String, List)');
 		} catch (err) {
-			console.log('[-] Conscrypt CertPinManager pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Conscrypt CertPinManager — com.android.org.conscrypt.CertPinManager not found');
+			console.log('[DIAG_OBFUSCATION] com.android.org.conscrypt.CertPinManager: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		
 		
@@ -368,12 +450,13 @@ setTimeout(function() {
 		try {
 			var legacy_conscrypt_CertPinManager_Activity = Java.use('com.android.org.conscrypt.CertPinManager');
 			legacy_conscrypt_CertPinManager_Activity.isChainValid.overload('java.lang.String', 'java.util.List').implementation = function(a, b) {
-				console.log('[+] Bypassing Conscrypt CertPinManager (Legacy): ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] Conscrypt CertPinManager (Legacy): ' + a);
 				return true;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Conscrypt CertPinManager (Legacy) — isChainValid(String, List)');
 		} catch (err) {
-			console.log('[-] Conscrypt CertPinManager (Legacy) pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Conscrypt CertPinManager (Legacy) — com.android.org.conscrypt.CertPinManager not found');
+			console.log('[DIAG_OBFUSCATION] com.android.org.conscrypt.CertPinManager: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 			   
@@ -383,13 +466,15 @@ setTimeout(function() {
 		///////////////////////////////////////////////////////////////////////////////////
 		try {
 			var cwac_CertPinManager_Activity = Java.use('com.commonsware.cwac.netsecurity.conscrypt.CertPinManager');
+			diagClassLoader('com.commonsware.cwac.netsecurity.conscrypt.CertPinManager', cwac_CertPinManager_Activity);
 			cwac_CertPinManager_Activity.isChainValid.overload('java.lang.String', 'java.util.List').implementation = function(a, b) {
-				console.log('[+] Bypassing CWAC-Netsecurity CertPinManager: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] CWAC-Netsecurity CertPinManager: ' + a);
 				return true;
 			};
+			console.log('[SSL_HOOK_INSTALLED] CWAC-Netsecurity CertPinManager — isChainValid(String, List)');
 		} catch (err) {
-			console.log('[-] CWAC-Netsecurity CertPinManager pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] CWAC-Netsecurity CertPinManager — com.commonsware.cwac.netsecurity.conscrypt.CertPinManager not found');
+			console.log('[DIAG_OBFUSCATION] com.commonsware.cwac.netsecurity.conscrypt.CertPinManager: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -399,13 +484,15 @@ setTimeout(function() {
 		/////////////////////////////////////////////////////
 		try {
 			var androidgap_WLCertificatePinningPlugin_Activity = Java.use('com.worklight.androidgap.plugin.WLCertificatePinningPlugin');
+			diagClassLoader('com.worklight.androidgap.plugin.WLCertificatePinningPlugin', androidgap_WLCertificatePinningPlugin_Activity);
 			androidgap_WLCertificatePinningPlugin_Activity.execute.overload('java.lang.String', 'org.json.JSONArray', 'org.apache.cordova.CallbackContext').implementation = function(a, b, c) {
-				console.log('[+] Bypassing Worklight Androidgap WLCertificatePinningPlugin: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] Worklight Androidgap WLCertificatePinningPlugin: ' + a);
 				return true;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Worklight Androidgap WLCertificatePinningPlugin — execute(...)');
 		} catch (err) {
-			console.log('[-] Worklight Androidgap WLCertificatePinningPlugin pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Worklight Androidgap WLCertificatePinningPlugin — com.worklight.androidgap.plugin.WLCertificatePinningPlugin not found');
+			console.log('[DIAG_OBFUSCATION] com.worklight.androidgap.plugin.WLCertificatePinningPlugin: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -415,14 +502,16 @@ setTimeout(function() {
 		//////////////////////////////////////////
 		try {
 			var netty_FingerprintTrustManagerFactory = Java.use('io.netty.handler.ssl.util.FingerprintTrustManagerFactory');
+			diagClassLoader('io.netty.handler.ssl.util.FingerprintTrustManagerFactory', netty_FingerprintTrustManagerFactory);
 			//NOTE: sometimes this below implementation could be useful 
 			//var netty_FingerprintTrustManagerFactory = Java.use('org.jboss.netty.handler.ssl.util.FingerprintTrustManagerFactory');
 			netty_FingerprintTrustManagerFactory.checkTrusted.implementation = function(type, chain) {
-				console.log('[+] Bypassing Netty FingerprintTrustManagerFactory');
+				console.log('[SSL_BYPASS_CONFIRMED] Netty FingerprintTrustManagerFactory: checkTrusted intercepted');
 			};
+			console.log('[SSL_HOOK_INSTALLED] Netty FingerprintTrustManagerFactory — checkTrusted(...)');
 		} catch (err) {
-			console.log('[-] Netty FingerprintTrustManagerFactory pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Netty FingerprintTrustManagerFactory — io.netty.handler.ssl.util.FingerprintTrustManagerFactory not found');
+			console.log('[DIAG_OBFUSCATION] io.netty.handler.ssl.util.FingerprintTrustManagerFactory: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -433,24 +522,27 @@ setTimeout(function() {
 		try {
 			// Bypass Squareup CertificatePinner  {1}
 			var Squareup_CertificatePinner_Activity_1 = Java.use('com.squareup.okhttp.CertificatePinner');
+			diagClassLoader('com.squareup.okhttp.CertificatePinner', Squareup_CertificatePinner_Activity_1);
 			Squareup_CertificatePinner_Activity_1.check.overload('java.lang.String', 'java.security.cert.Certificate').implementation = function(a, b) {
-				console.log('[+] Bypassing Squareup CertificatePinner {1}: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] Squareup CertificatePinner {1}: ' + a);
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Squareup CertificatePinner {1} — check(String, Certificate)');
 		} catch (err) {
-			console.log('[-] Squareup CertificatePinner {1} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Squareup CertificatePinner {1} — com.squareup.okhttp.CertificatePinner not found');
+			console.log('[DIAG_OBFUSCATION] com.squareup.okhttp.CertificatePinner: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass Squareup CertificatePinner {2}
 			var Squareup_CertificatePinner_Activity_2 = Java.use('com.squareup.okhttp.CertificatePinner');
 			Squareup_CertificatePinner_Activity_2.check.overload('java.lang.String', 'java.util.List').implementation = function(a, b) {
-				console.log('[+] Bypassing Squareup CertificatePinner {2}: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] Squareup CertificatePinner {2}: ' + a);
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Squareup CertificatePinner {2} — check(String, List)');
 		} catch (err) {
-			console.log('[-] Squareup CertificatePinner {2} pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Squareup CertificatePinner {2} — com.squareup.okhttp.CertificatePinner not found');
+			console.log('[DIAG_OBFUSCATION] com.squareup.okhttp.CertificatePinner: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -461,24 +553,27 @@ setTimeout(function() {
 		try {
 			// Bypass Squareup OkHostnameVerifier {1}
 			var Squareup_OkHostnameVerifier_Activity_1 = Java.use('com.squareup.okhttp.internal.tls.OkHostnameVerifier');
+			diagClassLoader('com.squareup.okhttp.internal.tls.OkHostnameVerifier', Squareup_OkHostnameVerifier_Activity_1);
 			Squareup_OkHostnameVerifier_Activity_1.verify.overload('java.lang.String', 'java.security.cert.X509Certificate').implementation = function(a, b) {
-				console.log('[+] Bypassing Squareup OkHostnameVerifier {1}: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] Squareup OkHostnameVerifier {1}: ' + a);
 				return true;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Squareup OkHostnameVerifier {1} — verify(String, X509Certificate)');
 		} catch (err) {
-			console.log('[-] Squareup OkHostnameVerifier check not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Squareup OkHostnameVerifier {1} — com.squareup.okhttp.internal.tls.OkHostnameVerifier not found');
+			console.log('[DIAG_OBFUSCATION] com.squareup.okhttp.internal.tls.OkHostnameVerifier: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}    
 		try {
 			// Bypass Squareup OkHostnameVerifier {2}
 			var Squareup_OkHostnameVerifier_Activity_2 = Java.use('com.squareup.okhttp.internal.tls.OkHostnameVerifier');
 			Squareup_OkHostnameVerifier_Activity_2.verify.overload('java.lang.String', 'javax.net.ssl.SSLSession').implementation = function(a, b) {
-				console.log('[+] Bypassing Squareup OkHostnameVerifier {2}: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] Squareup OkHostnameVerifier {2}: ' + a);
 				return true;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Squareup OkHostnameVerifier {2} — verify(String, SSLSession)');
 		} catch (err) {
-			console.log('[-] Squareup OkHostnameVerifier check not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Squareup OkHostnameVerifier {2} — com.squareup.okhttp.internal.tls.OkHostnameVerifier not found');
+			console.log('[DIAG_OBFUSCATION] com.squareup.okhttp.internal.tls.OkHostnameVerifier: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -489,42 +584,47 @@ setTimeout(function() {
 		try {
 			// Bypass WebViewClient {1} (deprecated from Android 6)
 			var AndroidWebViewClient_Activity_1 = Java.use('android.webkit.WebViewClient');
+			diagClassLoader('android.webkit.WebViewClient', AndroidWebViewClient_Activity_1);
 			AndroidWebViewClient_Activity_1.onReceivedSslError.overload('android.webkit.WebView', 'android.webkit.SslErrorHandler', 'android.net.http.SslError').implementation = function(obj1, obj2, obj3) {
-				console.log('[+] Bypassing Android WebViewClient check {1}');
+				console.log('[SSL_BYPASS_CONFIRMED] Android WebViewClient {1}: onReceivedSslError intercepted');
 			};
+			console.log('[SSL_HOOK_INSTALLED] Android WebViewClient {1} — onReceivedSslError(...)');
 		} catch (err) {
-			console.log('[-] Android WebViewClient {1} check not found');
-			//console.log(err)
+			console.log('[SSL_NOT_PRESENT] Android WebViewClient {1} — android.webkit.WebViewClient not found');
+			console.log('[DIAG_OBFUSCATION] android.webkit.WebViewClient: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass WebViewClient {2}
 			var AndroidWebViewClient_Activity_2 = Java.use('android.webkit.WebViewClient');
 			AndroidWebViewClient_Activity_2.onReceivedSslError.overload('android.webkit.WebView', 'android.webkit.WebResourceRequest', 'android.webkit.WebResourceError').implementation = function(obj1, obj2, obj3) {
-				console.log('[+] Bypassing Android WebViewClient check {2}');
+				console.log('[SSL_BYPASS_CONFIRMED] Android WebViewClient {2}: onReceivedSslError intercepted');
 			};
+			console.log('[SSL_HOOK_INSTALLED] Android WebViewClient {2} — onReceivedSslError(...)');
 		} catch (err) {
-			console.log('[-] Android WebViewClient {2} check not found');
-			//console.log(err)
+			console.log('[SSL_NOT_PRESENT] Android WebViewClient {2} — android.webkit.WebViewClient not found');
+			console.log('[DIAG_OBFUSCATION] android.webkit.WebViewClient: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass WebViewClient {3}
 			var AndroidWebViewClient_Activity_3 = Java.use('android.webkit.WebViewClient');
 			AndroidWebViewClient_Activity_3.onReceivedError.overload('android.webkit.WebView', 'int', 'java.lang.String', 'java.lang.String').implementation = function(obj1, obj2, obj3, obj4) {
-				console.log('[+] Bypassing Android WebViewClient check {3}');
+				console.log('[SSL_BYPASS_CONFIRMED] Android WebViewClient {3}: onReceivedError intercepted');
 			};
+			console.log('[SSL_HOOK_INSTALLED] Android WebViewClient {3} — onReceivedError(...)');
 		} catch (err) {
-			console.log('[-] Android WebViewClient {3} check not found');
-			//console.log(err)
+			console.log('[SSL_NOT_PRESENT] Android WebViewClient {3} — android.webkit.WebViewClient not found');
+			console.log('[DIAG_OBFUSCATION] android.webkit.WebViewClient: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass WebViewClient {4}
 			var AndroidWebViewClient_Activity_4 = Java.use('android.webkit.WebViewClient');
 			AndroidWebViewClient_Activity_4.onReceivedError.overload('android.webkit.WebView', 'android.webkit.WebResourceRequest', 'android.webkit.WebResourceError').implementation = function(obj1, obj2, obj3) {
-				console.log('[+] Bypassing Android WebViewClient check {4}');
+				console.log('[SSL_BYPASS_CONFIRMED] Android WebViewClient {4}: onReceivedError intercepted');
 			};
+			console.log('[SSL_HOOK_INSTALLED] Android WebViewClient {4} — onReceivedError(...)');
 		} catch (err) {
-			console.log('[-] Android WebViewClient {4} check not found');
-			//console.log(err)
+			console.log('[SSL_NOT_PRESENT] Android WebViewClient {4} — android.webkit.WebViewClient not found');
+			console.log('[DIAG_OBFUSCATION] android.webkit.WebViewClient: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		
 
@@ -534,13 +634,15 @@ setTimeout(function() {
 		//////////////////////////////////
 		try {
 			var CordovaWebViewClient_Activity = Java.use('org.apache.cordova.CordovaWebViewClient');
+			diagClassLoader('org.apache.cordova.CordovaWebViewClient', CordovaWebViewClient_Activity);
 			CordovaWebViewClient_Activity.onReceivedSslError.overload('android.webkit.WebView', 'android.webkit.SslErrorHandler', 'android.net.http.SslError').implementation = function(obj1, obj2, obj3) {
-				console.log('[+] Bypassing Apache Cordova WebViewClient check');
+				console.log('[SSL_BYPASS_CONFIRMED] Apache Cordova WebViewClient: onReceivedSslError intercepted');
 				obj3.proceed();
 			};
+			console.log('[SSL_HOOK_INSTALLED] Apache Cordova WebViewClient — onReceivedSslError(...)');
 		} catch (err) {
-			console.log('[-] Apache Cordova WebViewClient check not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Apache Cordova WebViewClient — org.apache.cordova.CordovaWebViewClient not found');
+			console.log('[DIAG_OBFUSCATION] org.apache.cordova.CordovaWebViewClient: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -550,12 +652,14 @@ setTimeout(function() {
 		///////////////////////////
 		try {
 			var boye_AbstractVerifier = Java.use('ch.boye.httpclientandroidlib.conn.ssl.AbstractVerifier');
+			diagClassLoader('ch.boye.httpclientandroidlib.conn.ssl.AbstractVerifier', boye_AbstractVerifier);
 			boye_AbstractVerifier.verify.implementation = function(host, ssl) {
-				console.log('[+] Bypassing Boye AbstractVerifier check: ' + host);
+				console.log('[SSL_BYPASS_CONFIRMED] Boye AbstractVerifier: ' + host);
 			};
+			console.log('[SSL_HOOK_INSTALLED] Boye AbstractVerifier — verify(String, SSLSocket)');
 		} catch (err) {
-			console.log('[-] Boye AbstractVerifier check not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Boye AbstractVerifier — ch.boye.httpclientandroidlib.conn.ssl.AbstractVerifier not found');
+			console.log('[DIAG_OBFUSCATION] ch.boye.httpclientandroidlib.conn.ssl.AbstractVerifier: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -565,13 +669,15 @@ setTimeout(function() {
 		/////////////////////////////
 		try {
 			var apache_AbstractVerifier = Java.use('org.apache.http.conn.ssl.AbstractVerifier');
+			diagClassLoader('org.apache.http.conn.ssl.AbstractVerifier', apache_AbstractVerifier);
 			apache_AbstractVerifier.verify.implementation = function(a, b, c, d) {
-				console.log('[+] Bypassing Apache AbstractVerifier check: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] Apache AbstractVerifier: ' + a);
 				return;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Apache AbstractVerifier — verify(...)');
 		} catch (err) {
-			console.log('[-] Apache AbstractVerifier check not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Apache AbstractVerifier — org.apache.http.conn.ssl.AbstractVerifier not found');
+			console.log('[DIAG_OBFUSCATION] org.apache.http.conn.ssl.AbstractVerifier: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -581,21 +687,23 @@ setTimeout(function() {
 		/////////////////////    
 		try {
 			var CronetEngineBuilderImpl_Activity = Java.use("org.chromium.net.impl.CronetEngineBuilderImpl");
+			diagClassLoader('org.chromium.net.impl.CronetEngineBuilderImpl', CronetEngineBuilderImpl_Activity);
 			// Setting argument to TRUE (default is TRUE) to disable Public Key pinning for local trust anchors
 			CronetEngine_Activity.enablePublicKeyPinningBypassForLocalTrustAnchors.overload('boolean').implementation = function(a) {
-				console.log("[+] Disabling Public Key pinning for local trust anchors in Chromium Cronet");
+				console.log("[SSL_BYPASS_CONFIRMED] Chromium Cronet: disablePublicKeyPinningBypassForLocalTrustAnchors");
 				var cronet_obj_1 = CronetEngine_Activity.enablePublicKeyPinningBypassForLocalTrustAnchors.call(this, true);
 				return cronet_obj_1;
 			};
 			// Bypassing Chromium Cronet pinner
 			CronetEngine_Activity.addPublicKeyPins.overload('java.lang.String', 'java.util.Set', 'boolean', 'java.util.Date').implementation = function(hostName, pinsSha256, includeSubdomains, expirationDate) {
-				console.log("[+] Bypassing Chromium Cronet pinner: " + hostName);
+				console.log("[SSL_BYPASS_CONFIRMED] Chromium Cronet: addPublicKeyPins for " + hostName);
 				var cronet_obj_2 = CronetEngine_Activity.addPublicKeyPins.call(this, hostName, pinsSha256, includeSubdomains, expirationDate);
 				return cronet_obj_2;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Chromium Cronet — enablePublicKeyPinningBypassForLocalTrustAnchors + addPublicKeyPins');
 		} catch (err) {
-			console.log('[-] Chromium Cronet pinner not found')
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Chromium Cronet — org.chromium.net.impl.CronetEngineBuilderImpl not found');
+			console.log('[DIAG_OBFUSCATION] org.chromium.net.impl.CronetEngineBuilderImpl: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -605,24 +713,28 @@ setTimeout(function() {
 		try {
 			// Bypass HttpCertificatePinning.check {1}
 			var HttpCertificatePinning_Activity = Java.use('diefferson.http_certificate_pinning.HttpCertificatePinning');
+			diagClassLoader('diefferson.http_certificate_pinning.HttpCertificatePinning', HttpCertificatePinning_Activity);
 			HttpCertificatePinning_Activity.checkConnexion.overload("java.lang.String", "java.util.List", "java.util.Map", "int", "java.lang.String").implementation = function (a, b, c ,d, e) {
-				console.log('[+] Bypassing Flutter HttpCertificatePinning : ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] Flutter HttpCertificatePinning: ' + a);
 				return true;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Flutter HttpCertificatePinning — checkConnexion(...)');
 		} catch (err) {
-			console.log('[-] Flutter HttpCertificatePinning pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Flutter HttpCertificatePinning — diefferson.http_certificate_pinning.HttpCertificatePinning not found');
+			console.log('[DIAG_OBFUSCATION] diefferson.http_certificate_pinning.HttpCertificatePinning: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 		try {
 			// Bypass SslPinningPlugin.check {2}
 			var SslPinningPlugin_Activity = Java.use('com.macif.plugin.sslpinningplugin.SslPinningPlugin');
+			diagClassLoader('com.macif.plugin.sslpinningplugin.SslPinningPlugin', SslPinningPlugin_Activity);
 			SslPinningPlugin_Activity.checkConnexion.overload("java.lang.String", "java.util.List", "java.util.Map", "int", "java.lang.String").implementation = function (a, b, c ,d, e) {
-				console.log('[+] Bypassing Flutter SslPinningPlugin: ' + a);
+				console.log('[SSL_BYPASS_CONFIRMED] Flutter SslPinningPlugin: ' + a);
 				return true;
 			};
+			console.log('[SSL_HOOK_INSTALLED] Flutter SslPinningPlugin — checkConnexion(...)');
 		} catch (err) {
-			console.log('[-] Flutter SslPinningPlugin pinner not found');
-			//console.log(err);
+			console.log('[SSL_NOT_PRESENT] Flutter SslPinningPlugin — com.macif.plugin.sslpinningplugin.SslPinningPlugin not found');
+			console.log('[DIAG_OBFUSCATION] com.macif.plugin.sslpinningplugin.SslPinningPlugin: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.');
 		}
 
 
@@ -658,7 +770,8 @@ setTimeout(function() {
 					var methodName = callingFunctionStack.getMethodName();
 					var callingClass = Java.use(className);
 					var callingMethod = callingClass[methodName];
-					console.log('\x1b[36m[!] Attempting to bypass uncommon SSL Pinning method on: '+className+'.'+methodName+'\x1b[0m');					
+					console.log('\x1b[36m[!] Attempting to bypass uncommon SSL Pinning method on: '+className+'.'+methodName+'\x1b[0m');
+					console.log('[SSL_BYPASS_CONFIRMED] Dynamic SSLPeerUnverifiedException patch: ' + className + '.' + methodName);
 					// Skip it when already patched by Frida
 					if (callingMethod.implementation) {
 						return; 
@@ -709,7 +822,7 @@ setTimeout(function() {
 							}
 						}
 					} else {
-						console.log('\x1b[36m[-] Failed to dynamically patch SSLPeerUnverifiedException '+e+'\x1b[0m');
+						console.log('[SSL_NOT_PRESENT] Dynamic patch failed for SSLPeerUnverifiedException: ' + e);
 					}
 				}
 				//console.log('\x1b[36m[+] SSLPeerUnverifiedException hooked\x1b[0m');

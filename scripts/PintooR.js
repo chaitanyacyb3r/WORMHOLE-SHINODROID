@@ -350,6 +350,30 @@ Java.perform(function() {
         console.log("");
         console.log("[.] Android Cert Pinning Bypass");
 
+        // ── Diagnostic Utilities ─────────────────────────────────────────────
+        var _diagDone = {}; // Track which classes have been diagnosed
+
+        function diagClassLoader(className, resolvedClass) {
+            if (_diagDone[className]) return;
+            _diagDone[className] = true;
+            try {
+                var resolvedLoader = resolvedClass.class.getClassLoader();
+                console.log('[DIAG_CLASSLOADER] ' + className + ' resolved from: ' + resolvedLoader);
+                Java.enumerateClassLoaders({
+                    onMatch: function(loader) {
+                        if (String(loader) === String(resolvedLoader)) return;
+                        try {
+                            loader.loadClass(className);
+                            console.log('[DIAG_CLASSLOADER_MISMATCH] ' + className + ' ALSO found in: ' + loader);
+                        } catch(e) { /* not in this loader */ }
+                    },
+                    onComplete: function() {}
+                });
+            } catch(e) {
+                console.log('[DIAG_CLASSLOADER] Could not inspect ClassLoader for ' + className + ': ' + e.message);
+            }
+        }
+
         var CertificateFactory = Java.use("java.security.cert.CertificateFactory");
         var FileInputStream = Java.use("java.io.FileInputStream");
         var BufferedInputStream = Java.use("java.io.BufferedInputStream");
@@ -358,19 +382,31 @@ Java.perform(function() {
         var TrustManagerFactory = Java.use("javax.net.ssl.TrustManagerFactory");
         var SSLContext = Java.use("javax.net.ssl.SSLContext");
         var X509TrustManager = Java.use('javax.net.ssl.X509TrustManager');
+        
+        diagClassLoader('javax.net.ssl.SSLContext', SSLContext);
+        diagClassLoader('javax.net.ssl.X509TrustManager', X509TrustManager);
+
         console.log("[.] TrustManagerImpl Android 7+ detection...");
         try {
             var TrustManagerImpl = Java.use('com.android.org.conscrypt.TrustManagerImpl');
+            diagClassLoader('com.android.org.conscrypt.TrustManagerImpl', TrustManagerImpl);
             TrustManagerImpl.verifyChain.implementation = function(untrustedChain, trustAnchorChain, host, clientAuth, ocspData, tlsSctData) {
-                console.log("[+] (Android 7+) TrustManagerImpl verifyChain() called. Not throwing an exception.");
+                console.log("[SSL_BYPASS_CONFIRMED] TrustManagerImpl (Android > 7) verifyChain: " + host);
                 return untrustedChain;
             }
+            console.log('[SSL_HOOK_INSTALLED] TrustManagerImpl (Android > 7) {2} — verifyChain(...)');
 
+            // NOTE: This Appcelerator hook inside the TrustManagerImpl block was in the original PintooR script
+            // but seems out of place. Preserving logic but fixing logs.
+            var PinningTrustManager = Java.use('appcelerator.https.PinningTrustManager');
+            diagClassLoader('appcelerator.https.PinningTrustManager', PinningTrustManager);
             PinningTrustManager.checkServerTrusted.implementation = function() {
-                console.log("[+] Appcelerator checkServerTrusted() called. Not throwing an exception.");
+                console.log("[SSL_BYPASS_CONFIRMED] Appcelerator PinningTrustManager: checkServerTrusted intercepted");
             }
+            console.log('[SSL_HOOK_INSTALLED] Appcelerator PinningTrustManager — checkServerTrusted(...)');
         } catch (err) {
-            console.log("[-] TrustManagerImpl Not Found");
+            console.log("[SSL_NOT_PRESENT] TrustManagerImpl (Android > 7) {2} — com.android.org.conscrypt.TrustManagerImpl not found");
+            console.log("[DIAG_OBFUSCATION] com.android.org.conscrypt.TrustManagerImpl: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.");
         }
 
         console.log("[.] TrustManager Android < 7 detection...");
@@ -393,33 +429,40 @@ Java.perform(function() {
 
         try {
             SSLContext_init.implementation = function(keyManager, trustManager, secureRandom) {
-                console.log("[+] Overriding SSLContext.init() with the custom TrustManager android < 7");
+                console.log("[SSL_BYPASS_CONFIRMED] TrustManager (Android < 7): SSLContext.init() intercepted");
                 SSLContext_init.call(this, keyManager, TrustManagers, secureRandom);
             };
+            console.log('[SSL_HOOK_INSTALLED] TrustManager (Android < 7) — javax.net.ssl.SSLContext.init(KeyManager[], TrustManager[], SecureRandom)');
         } catch (err) {
-            console.log("[-] TrustManager Not Found");
+            console.log("[SSL_NOT_PRESENT] TrustManager (Android < 7) — javax.net.ssl.SSLContext.init not found");
+            console.log("[DIAG_OBFUSCATION] javax.net.ssl.SSLContext: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.");
         }
         console.log("[.] OkHTTP 3.x detection...");
         try {
             var CertificatePinner = Java.use('okhttp3.CertificatePinner');
+            diagClassLoader('okhttp3.CertificatePinner', CertificatePinner);
             console.log("[+] OkHTTP 3.x Found");
-            CertificatePinner.check.overload('java.lang.String', 'java.util.List').implementation = function() {
-                console.log("[+] OkHTTP 3.x check() called. Not throwing an exception.");
+            CertificatePinner.check.overload('java.lang.String', 'java.util.List').implementation = function(a, b) {
+                console.log("[SSL_BYPASS_CONFIRMED] OkHTTPv3 {1}: " + a);
             };
+            console.log('[SSL_HOOK_INSTALLED] OkHTTPv3 {1} — okhttp3.CertificatePinner.check(String, List)');
         } catch (err) {
-            console.log("[-] OkHTTP 3.x Not Found")
+            console.log("[SSL_NOT_PRESENT] OkHTTPv3 {1} — okhttp3.CertificatePinner not found");
+            console.log("[DIAG_OBFUSCATION] okhttp3.CertificatePinner: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.");
         }
 
         console.log("[.] Appcelerator Titanium detection...");
         try {
-            var PinningTrustManager = Java.use('appcelerator.https.PinningTrustManager');
+            var PinningTrustManager2 = Java.use('appcelerator.https.PinningTrustManager');
+            diagClassLoader('appcelerator.https.PinningTrustManager', PinningTrustManager2);
             console.log("[+] Appcelerator Titanium Found");
-            PinningTrustManager.checkServerTrusted.implementation = function() {
-                console.log("[+] Appcelerator checkServerTrusted() called. Not throwing an exception.");
+            PinningTrustManager2.checkServerTrusted.implementation = function() {
+                console.log("[SSL_BYPASS_CONFIRMED] Appcelerator PinningTrustManager: checkServerTrusted intercepted");
             }
-
+            console.log('[SSL_HOOK_INSTALLED] Appcelerator PinningTrustManager — checkServerTrusted(...)');
         } catch (err) {
-            console.log("[-] Appcelerator Titanium Not Found");
+            console.log("[SSL_NOT_PRESENT] Appcelerator PinningTrustManager — appcelerator.https.PinningTrustManager not found");
+            console.log("[DIAG_OBFUSCATION] appcelerator.https.PinningTrustManager: Class not found. May indicate R8/ProGuard obfuscation renamed this class. Check the app mapping.txt for the obfuscated name.");
         }
 	
 	   	

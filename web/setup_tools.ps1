@@ -37,6 +37,8 @@ Write-Host ""
 $openclawPath = "C:\OPENCLAW-SECURITY-INTEGRITY"
 
 $mobsfPath = "C:\Mobile-Security-Framework-MobSF"
+$webPath = $PSScriptRoot
+$rootDir = Split-Path $PSScriptRoot -Parent
 
 if ($Docker) {
     Write-Host "  Mode: DOCKER" -ForegroundColor Cyan
@@ -306,7 +308,7 @@ $devices2 = cmd /c "adb devices 2>&1"
 $connected = $devices2 | Select-String "device$"
 
 if ($connected) {
-    $setupScript = "..\setup-emulator.ps1"
+    $setupScript = Join-Path $rootDir "setup-emulator.ps1"
     if (Test-Path $setupScript) {
         Write-Host "  [--] Installing Frida server on emulator..." -ForegroundColor Gray
         & $setupScript
@@ -437,6 +439,6 @@ if (-not $Docker) {
     Write-Host "  ==========================================" -ForegroundColor Cyan
     Write-Host ""
     # Navigate up to the project root and start the scan worker
-    Set-Location ..
+    Set-Location $rootDir
     node src/daemon.mjs
 }
