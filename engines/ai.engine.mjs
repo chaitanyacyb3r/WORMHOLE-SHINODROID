@@ -874,6 +874,7 @@ export default {
      * Check if Ollama is running and the model is available.
      */
     async isAvailable() {
+        if (process.env.SKIP_AI) return false;
         try {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 5000);

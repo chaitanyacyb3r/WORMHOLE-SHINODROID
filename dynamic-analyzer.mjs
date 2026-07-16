@@ -14,9 +14,10 @@
 
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile, readFile, readdir, access } from "node:fs/promises";
-import { join, dirname, resolve } from "node:path";
+import { writeFile, readFile, readdir, access, rm, mkdir } from "node:fs/promises";
+import { join, dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 
 const execFileAsync = promisify(execFile);
 
@@ -27,7 +28,7 @@ const __dirname = dirname(__filename);
 const SCRIPTS_DIR = join(__dirname, "scripts");
 
 // How long to let each Frida script run before collecting output (ms)
-const FRIDA_SCRIPT_TIMEOUT = parseInt(process.env.FRIDA_TIMEOUT_MS || "120000");
+const FRIDA_SCRIPT_TIMEOUT = parseInt(process.env.FRIDA_TIMEOUT_MS || "40000");
 
 // Path to setup-emulator.ps1 (auto-launches emulator + Frida server)
 const SETUP_EMULATOR_SCRIPT = join(__dirname, "setup-emulator.ps1");
@@ -37,6 +38,18 @@ const ADB = "adb";
 
 // android-unpinner command
 const UNPINNER = "android-unpinner";
+
+// Android SDK build-tools (for zipalign)
+const BUILD_TOOLS = join(
+    process.env.ANDROID_HOME || join(process.env.LOCALAPPDATA || "", "Android", "Sdk"),
+    "build-tools"
+);
+
+// Debug keystore for re-signing patched APKs
+const DEBUG_KEYSTORE = join(process.env.USERPROFILE || "", ".gemini", "debug.keystore");
+
+// apktool.jar path (call via java -jar to avoid the .bat's "pause" blocking automation)
+const APKTOOL_JAR = "C:\\Windows\\apktool.jar";
 
 // Target device serial — set by checkEmulator(), used by adb() to add -s flag
 let targetSerial = process.env.ANDROID_SERIAL || null;
@@ -134,11 +147,45 @@ async function installApk(apkPath) {
         if (stdout.includes("Success") || stdout.includes("success")) {
             return { success: true };
         }
-        return { success: false, error: (stderr || stdout).slice(0, 300) };
+        const output = (stderr || stdout);
+        // Signature mismatch — uninstall the old version and retry
+        if (output.includes("INSTALL_FAILED_UPDATE_INCOMPATIBLE")) {
+            log("warn", "Signature mismatch — uninstalling old version and retrying...");
+            // Extract package name from the error message or use aapt
+            const pkgMatch = output.match(/Package\s+([\w.]+)\s/);
+            if (pkgMatch) {
+                try { await execFileAsync(ADB, adb("uninstall", pkgMatch[1]), { timeout: 30_000 }); } catch { }
+            }
+            const retry = await execFileAsync(ADB, adb("install", "-t", apkPath), { timeout: 120_000 });
+            if (retry.stdout.includes("Success") || retry.stdout.includes("success")) {
+                return { success: true };
+            }
+            return { success: false, error: (retry.stderr || retry.stdout).slice(0, 300) };
+        }
+        return { success: false, error: output.slice(0, 300) };
     } catch (err) {
-        return { success: false, error: err.message.slice(0, 300) };
+        const msg = err.message || "";
+        // Also handle the mismatch when it comes as an exception
+        if (msg.includes("INSTALL_FAILED_UPDATE_INCOMPATIBLE")) {
+            log("warn", "Signature mismatch (exception) — uninstalling old version and retrying...");
+            const pkgMatch = msg.match(/Package\s+([\w.]+)\s/);
+            if (pkgMatch) {
+                try { await execFileAsync(ADB, adb("uninstall", pkgMatch[1]), { timeout: 30_000 }); } catch { }
+            }
+            try {
+                const retry = await execFileAsync(ADB, adb("install", "-t", apkPath), { timeout: 120_000 });
+                if (retry.stdout.includes("Success") || retry.stdout.includes("success")) {
+                    return { success: true };
+                }
+                return { success: false, error: (retry.stderr || retry.stdout).slice(0, 300) };
+            } catch (retryErr) {
+                return { success: false, error: retryErr.message.slice(0, 300) };
+            }
+        }
+        return { success: false, error: msg.slice(0, 300) };
     }
 }
+
 
 /**
  * Uninstall a package from the emulator.
@@ -802,39 +849,120 @@ function runFridaScript(packageName, scriptPath, scriptName) {
  * receiving data. A foreground watchdog checks before each batch and
  * re-launches the app if it has been backgrounded.
  */
+
+
 async function exerciseApp(packageName) {
     try {
-        log("info", `Exercising ${packageName} with safe targeted inputs...`);
-
-        // Safe content area boundaries (conservative margins to avoid
-        // status bar, navigation bar, and edge gestures)
-        const minX = 80, maxX = 1000;
-        const minY = 250, maxY = 1650;
+        log("info", `Exercising ${packageName} with targeted UI interactions...`);
 
         const randInt = (lo, hi) => Math.floor(Math.random() * (hi - lo + 1)) + lo;
 
+        // ── Phase 1: Targeted taps on every clickable UI element ────────
+        // Uses UIAutomator to dump the screen hierarchy and find all
+        // clickable/focusable elements (buttons, switches, checkboxes, etc.)
+        // This GUARANTEES that every visible button gets pressed at least once.
+        let targetedTaps = 0;
+        const MAX_SCREENS = 3; // Dump → tap → re-dump up to 3 times to catch new screens
+        let lastUiXml = "";
+        const tappedCoords = new Set();
+
+        for (let screen = 0; screen < MAX_SCREENS; screen++) {
+            await ensureAppForeground(packageName);
+
+            // Dump UI hierarchy to XML
+            let uiXml = "";
+            try {
+                await execFileAsync(ADB, adb(
+                    "shell", "uiautomator", "dump", "/data/local/tmp/ui.xml"
+                ), { timeout: 10_000 });
+                const { stdout } = await execFileAsync(ADB, adb(
+                    "shell", "cat", "/data/local/tmp/ui.xml"
+                ), { timeout: 10_000 });
+                uiXml = stdout;
+            } catch (e) {
+                log("warn", `UIAutomator dump failed on pass ${screen + 1}: ${e.message?.substring(0, 60)}`);
+                break;
+            }
+
+            if (!uiXml || uiXml.length < 50) break;
+            
+            // If the screen hasn't changed at all since the last pass, we're done!
+            if (uiXml === lastUiXml) {
+                log("info", `  Screen pass ${screen + 1}: UI has not changed, stopping targeted taps`);
+                break;
+            }
+            lastUiXml = uiXml;
+
+            // Parse all clickable elements with bounds
+            // Format: bounds="[x1,y1][x2,y2]" clickable="true"
+            const clickableRegex = /clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"|bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*clickable="true"/g;
+            const elements = [];
+            let match;
+
+            while ((match = clickableRegex.exec(uiXml)) !== null) {
+                const x1 = parseInt(match[1] || match[5]);
+                const y1 = parseInt(match[2] || match[6]);
+                const x2 = parseInt(match[3] || match[7]);
+                const y2 = parseInt(match[4] || match[8]);
+                const cx = Math.floor((x1 + x2) / 2);
+                const cy = Math.floor((y1 + y2) / 2);
+                
+                const coordKey = `${cx},${cy}`;
+                
+                // Skip elements in status bar or navigation bar, and elements we already tapped
+                if (cy > 100 && cy < 1800 && cx > 20 && cx < 1060 && !tappedCoords.has(coordKey)) {
+                    elements.push({ cx, cy, coordKey });
+                }
+            }
+
+            if (elements.length === 0) {
+                log("info", `  Screen pass ${screen + 1}: no NEW clickable elements found`);
+                break;
+            }
+
+            log("info", `  Screen pass ${screen + 1}: found ${elements.length} new clickable elements — tapping each one`);
+
+            // Tap each clickable element deliberately
+            for (const el of elements) {
+                try {
+                    await execFileAsync(ADB, adb(
+                        "shell", `input tap ${el.cx} ${el.cy}`
+                    ), { timeout: 5_000 });
+                    tappedCoords.add(el.coordKey);
+                    targetedTaps++;
+                    // Brief pause to let the app process the tap
+                    await new Promise(r => setTimeout(r, 500));
+                } catch { /* individual tap failure is fine */ }
+            }
+
+            // Wait for any network calls / UI transitions triggered by the taps
+            await new Promise(r => setTimeout(r, 2000));
+        }
+
+        log("ok", `Phase 1 complete — ${targetedTaps} targeted taps on real UI elements`);
+
+        // ── Phase 2: Random taps as secondary coverage ──────────────────
+        // Catches elements that might not appear as "clickable" in the
+        // UIAutomator dump (e.g. custom views, Compose click handlers)
+        const minX = 80, maxX = 1000;
+        const minY = 250, maxY = 1650;
         const actions = [];
 
-        // Generate 30 taps at random safe positions
-        for (let i = 0; i < 30; i++) {
+        for (let i = 0; i < 15; i++) {
             actions.push(`input tap ${randInt(minX, maxX)} ${randInt(minY, maxY)}`);
         }
 
-        // Interleave 8 swipes (scroll up/down within app)
-        for (let i = 0; i < 8; i++) {
+        // A few swipes to scroll and reveal hidden content
+        for (let i = 0; i < 4; i++) {
             const x = randInt(200, 800);
             const y1 = randInt(400, 900);
             const y2 = randInt(1000, 1400);
-            // Alternate scroll direction
             actions.push(i % 2 === 0
-                ? `input swipe ${x} ${y1} ${x} ${y2} 300`   // scroll up
-                : `input swipe ${x} ${y2} ${x} ${y1} 300`); // scroll down
+                ? `input swipe ${x} ${y1} ${x} ${y2} 300`
+                : `input swipe ${x} ${y2} ${x} ${y1} 300`);
         }
 
-        // NO KEYCODE_BACK — it backgrounds the app from the root activity.
-        // Instead, we only use taps and swipes within the app's content area.
-
-        // Shuffle actions for more natural interaction
+        // Shuffle for natural interaction
         for (let i = actions.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [actions[i], actions[j]] = [actions[j], actions[i]];
@@ -843,26 +971,20 @@ async function exerciseApp(packageName) {
         // Execute in batches with foreground watchdog
         const batchSize = 6;
         for (let i = 0; i < actions.length; i += batchSize) {
-            // ── Foreground watchdog ──────────────────────────────────────
-            // Before each batch, verify the app is still in the foreground.
-            // If it got backgrounded (by an accidental gesture, dialog, etc.),
-            // re-launch it immediately.
             await ensureAppForeground(packageName);
-
             const batch = actions.slice(i, i + batchSize);
             const cmd = batch.join(" && sleep 0.15 && ");
             try {
-                await execFileAsync(ADB, adb("shell", cmd), {
-                    timeout: 15_000,
-                });
+                await execFileAsync(ADB, adb("shell", cmd), { timeout: 15_000 });
             } catch { /* individual batch failure is fine */ }
         }
 
-        log("ok", `App exercised — ${actions.length} safe input events sent`);
+        log("ok", `App exercised — ${targetedTaps} targeted + ${actions.length} random = ${targetedTaps + actions.length} total events`);
     } catch (err) {
         log("info", `Exerciser finished (${err.message?.substring(0, 60) || "done"})`);
     }
 }
+
 
 /**
  * Check if the target app is currently in the foreground.
@@ -1449,30 +1571,47 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
     }
 
     // 5. Run Frida scripts
+    // ⚠️ ORDER MATTERS: Root detection / anti-tamper bypass MUST run FIRST.
+    // Many apps check for root on startup and call System.exit() if detected.
+    // If we run SSL hooks first, the app crashes before making any network call,
+    // causing SSL bypass to silently fail. By neutralizing root detection first,
+    // subsequent SSL scripts run against an app that stays alive.
     const scripts = [
-        // MASVS-NETWORK — SSL/TLS bypass
-        { name: "SSL Pinning Bypass", file: join(SCRIPTS_DIR, "SSL-BYE.js") },
-        // MASVS-NETWORK — HTTPToolkit SSL Pinning Bypass (from android-unpinner)
-        { name: "HTTPToolkit SSL Bypass", file: join(SCRIPTS_DIR, "HTTPTOOLKIT-UNPINNER.js") },
-        // MASVS-NETWORK — Obfuscated/Native SSL Pinning Detection
-        { name: "SSL Obfuscated/Native Detection", file: join(SCRIPTS_DIR, "SSL-DETECT-OBFUSCATED.js") },
-        // MASVS-RESILIENCE — Root detection
+        // ── Phase 1: Anti-tamper & root detection bypass (run FIRST) ────
+        // These keep the app alive so subsequent scripts can do their job
         { name: "Root Detection Bypass", file: join(SCRIPTS_DIR, "ROOTER.js") },
-        // MASVS-RESILIENCE + NETWORK — Combined
-        { name: "Combined Bypass (PintooR)", file: join(SCRIPTS_DIR, "PintooR.js") },
-        // MASVS-CRYPTO — Cryptographic monitoring
-        { name: "Crypto Monitor", file: join(SCRIPTS_DIR, "SHINOBI-CRYPTO.js") },
-        // MASVS-NETWORK — Network traffic analysis
-        { name: "Network Monitor", file: join(SCRIPTS_DIR, "SHINOBI-NETWORK.js") },
-        // MASVS-STORAGE — Data storage monitoring
-        { name: "Storage Monitor", file: join(SCRIPTS_DIR, "SHINOBI-STORAGE.js") },
-        // MASVS-AUTH — Authentication monitoring
-        { name: "Auth Monitor", file: join(SCRIPTS_DIR, "SHINOBI-AUTH.js") },
-        // MASVS-PLATFORM — Platform interaction
-        { name: "Platform Monitor", file: join(SCRIPTS_DIR, "SHINOBI-PLATFORM.js") },
-        // MASVS-RESILIENCE — Anti-tamper bypass
         { name: "Resilience Bypass", file: join(SCRIPTS_DIR, "SHINOBI-RESILIENCE.js") },
+
+        // ── Phase 2: SSL/TLS pinning bypass ─────────────────────────────
+        // Now that root detection is neutralized, SSL hooks can fire properly
+        { name: "Combined Bypass (PintooR)", file: join(SCRIPTS_DIR, "PintooR.js") },
+        { name: "SSL Pinning Bypass", file: join(SCRIPTS_DIR, "SSL-BYE.js") },
+        { name: "HTTPToolkit SSL Bypass", file: join(SCRIPTS_DIR, "HTTPTOOLKIT-UNPINNER.js") },
+        { name: "SSL Obfuscated/Native Detection", file: join(SCRIPTS_DIR, "SSL-DETECT-OBFUSCATED.js") },
+
+        // ── Phase 3: Behavioral monitoring ──────────────────────────────
+        // Passive observation of crypto, network, storage, auth, platform usage
+        { name: "Crypto Monitor", file: join(SCRIPTS_DIR, "SHINOBI-CRYPTO.js") },
+        { name: "Network Monitor", file: join(SCRIPTS_DIR, "SHINOBI-NETWORK.js") },
+        { name: "Storage Monitor", file: join(SCRIPTS_DIR, "SHINOBI-STORAGE.js") },
+        { name: "Auth Monitor", file: join(SCRIPTS_DIR, "SHINOBI-AUTH.js") },
+        { name: "Platform Monitor", file: join(SCRIPTS_DIR, "SHINOBI-PLATFORM.js") },
     ];
+
+    // Filter scripts based on environment variable if provided
+    // Example: set FRIDA_SCRIPTS_FILTER="SSL,PintooR,Resilience"
+    if (process.env.FRIDA_SCRIPTS_FILTER) {
+        const allowedTokens = process.env.FRIDA_SCRIPTS_FILTER.toLowerCase().split(",").map(s => s.trim());
+        const originalCount = scripts.length;
+        
+        // Mutate the array in place or reassign (since it's a const, we'll reassign the contents)
+        const filtered = scripts.filter(s => 
+            allowedTokens.some(token => s.name.toLowerCase().includes(token))
+        );
+        scripts.length = 0;
+        scripts.push(...filtered);
+        log("info", `Filtered scripts from ${originalCount} to ${scripts.length} based on FRIDA_SCRIPTS_FILTER`);
+    }
 
     // Append AI-free custom hooks from MobSF analysis
     let customScriptsCount = 0;
@@ -1501,27 +1640,75 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
                 } catch (e) {
                     log("info", "logcat -c encountered an error, but continuing...");
                 }
-                
-                // Spawn android-unpinner all
-                const child = spawn(UNPINNER, ["all", "--force", apkPath], { stdio: "pipe" });
-                
-                // Programmatically answer the prompt "Continue? [y/N]:"
-                child.stdin.write("y\n");
-                child.stdin.end();
-                
-                // Wait for the tool to finish injecting the gadget
-                await new Promise((resolve) => {
-                    let done = false;
-                    const finish = () => { if (!done) { done = true; resolve(); } };
-                    child.on("close", finish);
-                    child.on("error", finish);
-                    
-                    // Failsafe timeout in case android-unpinner hangs
-                    setTimeout(() => {
-                        try { child.kill("SIGTERM"); } catch (e) {}
-                        finish();
-                    }, 45000);
-                });
+
+                // ── Stop frida-server to avoid JDWP conflicts ───────────────
+                // frida-server holds open JDWP transports and port forwards
+                // that can interfere with android-unpinner's own JDWP session.
+                log("info", "Stopping frida-server temporarily (avoids JDWP conflicts)...");
+                try {
+                    await execFileAsync(ADB, adb("shell", "pkill", "-9", "frida-server"), { timeout: 5000 });
+                } catch { /* frida-server might not be running */ }
+
+                // Clear all stale ADB port forwards
+                try {
+                    await execFileAsync(ADB, adb("forward", "--remove-all"), { timeout: 5000 });
+                } catch { /* no forwards to remove */ }
+
+                // Force-stop the app in case it's still running from a previous script
+                try {
+                    await execFileAsync(ADB, adb("shell", "am", "force-stop", packageName), { timeout: 5000 });
+                } catch { }
+
+                // Clear debug app flag from previous runs
+                try {
+                    await execFileAsync(ADB, adb("shell", "am", "clear-debug-app"), { timeout: 5000 });
+                } catch { }
+
+                // ── Uninstall existing app to prevent signature conflicts ────
+                // android-unpinner does its own APK patching + signing, so the
+                // version it installs will have a DIFFERENT signature from the
+                // one we installed earlier. Uninstalling first avoids
+                // INSTALL_FAILED_UPDATE_INCOMPATIBLE inside the unpinner.
+                log("info", "Uninstalling existing app to prevent signature conflicts...");
+                try {
+                    await execFileAsync(ADB, adb("uninstall", packageName), { timeout: 30_000 });
+                    log("info", `Uninstalled ${packageName}`);
+                } catch {
+                    log("info", `${packageName} was not installed (clean slate)`);
+                }
+
+                await new Promise(r => setTimeout(r, 2000));
+
+                // ── Run android-unpinner with ORIGINAL APK ───────────────────
+                // The unpinner does its own: decode → patch debuggable → rebuild
+                // → sign → install → set-debug-app → JDWP attach → inject gadget.
+                // We pass the original APK and let it handle everything.
+                log("info", `Running: android-unpinner all -f ${apkPath}`);
+                try {
+                    const { stdout: unpinnerOut, stderr: unpinnerErr } = await execFileAsync(
+                        UNPINNER, ["all", "-f", apkPath], { 
+                            timeout: 300_000,
+                            env: { ...process.env, PYTHONIOENCODING: "utf-8" }
+                        }
+                    );
+                    log("ok", "android-unpinner completed successfully");
+                    if (unpinnerOut) log("info", `unpinner stdout: ${unpinnerOut.substring(0, 500)}`);
+                } catch (e) {
+                    // android-unpinner often exits non-zero even on success
+                    const msg = e.message || "";
+                    const stderr = e.stderr || "";
+                    log("info", `android-unpinner finished (exit code non-zero): ${msg.split("\n")[0]}`);
+                    if (stderr) log("info", `unpinner stderr: ${stderr.substring(0, 500)}`);
+                }
+
+                // ── Restart frida-server for subsequent scripts ─────────────
+                try {
+                    spawn(ADB, adb("shell", "/data/local/tmp/frida-server", "-D"), {
+                        stdio: "ignore", detached: true
+                    }).unref();
+                    await new Promise(r => setTimeout(r, 2000));
+                    log("info", "frida-server restarted");
+                } catch { }
                 
                 // Wait briefly for app to fully initialize
                 await new Promise(r => setTimeout(r, 5000));
@@ -1651,3 +1838,4 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
 
     return { success: true, results: fridaResults, findings: dynamicFindings };
 }
+
