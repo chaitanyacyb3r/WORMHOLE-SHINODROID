@@ -28,7 +28,7 @@ const __dirname = dirname(__filename);
 const SCRIPTS_DIR = join(__dirname, "scripts");
 
 // How long to let each Frida script run before collecting output (ms)
-const FRIDA_SCRIPT_TIMEOUT = parseInt(process.env.FRIDA_TIMEOUT_MS || "40000");
+const FRIDA_SCRIPT_TIMEOUT = parseInt(process.env.FRIDA_TIMEOUT_MS || "60000");
 
 // Path to setup-emulator.ps1 (auto-launches emulator + Frida server)
 const SETUP_EMULATOR_SCRIPT = join(__dirname, "setup-emulator.ps1");
