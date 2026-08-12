@@ -857,6 +857,28 @@ async function exerciseApp(packageName) {
 
         const randInt = (lo, hi) => Math.floor(Math.random() * (hi - lo + 1)) + lo;
 
+        // ── Detect screen resolution dynamically ────────────────────────
+        let screenW = 1080, screenH = 1920; // safe defaults
+        try {
+            const { stdout: wmOut } = await execFileAsync(ADB, adb(
+                "shell", "wm", "size"
+            ), { timeout: 5_000 });
+            const sizeMatch = wmOut.match(/(\d+)x(\d+)/);
+            if (sizeMatch) {
+                screenW = parseInt(sizeMatch[1]);
+                screenH = parseInt(sizeMatch[2]);
+            }
+        } catch { /* use defaults */ }
+        log("info", `  Screen resolution: ${screenW}x${screenH}`);
+
+        // Compute safe tap bounds (avoid status bar, nav bar, edges)
+        const safeBounds = {
+            minX: Math.floor(screenW * 0.02),   // 2% from left
+            maxX: Math.floor(screenW * 0.98),   // 2% from right
+            minY: Math.floor(screenH * 0.05),   // 5% from top (status bar)
+            maxY: Math.floor(screenH * 0.90),   // 10% from bottom (nav bar)
+        };
+
         // ── Phase 1: Targeted taps on every clickable UI element ────────
         // Uses UIAutomator to dump the screen hierarchy and find all
         // clickable/focusable elements (buttons, switches, checkboxes, etc.)
@@ -910,7 +932,7 @@ async function exerciseApp(packageName) {
                 const coordKey = `${cx},${cy}`;
                 
                 // Skip elements in status bar or navigation bar, and elements we already tapped
-                if (cy > 100 && cy < 1800 && cx > 20 && cx < 1060 && !tappedCoords.has(coordKey)) {
+                if (cy > safeBounds.minY && cy < safeBounds.maxY && cx > safeBounds.minX && cx < safeBounds.maxX && !tappedCoords.has(coordKey)) {
                     elements.push({ cx, cy, coordKey });
                 }
             }
@@ -926,13 +948,15 @@ async function exerciseApp(packageName) {
             for (const el of elements) {
                 try {
                     await execFileAsync(ADB, adb(
-                        "shell", `input tap ${el.cx} ${el.cy}`
+                        "shell", `su -c 'input tap ${el.cx} ${el.cy}' 2>/dev/null || input tap ${el.cx} ${el.cy}`
                     ), { timeout: 5_000 });
                     tappedCoords.add(el.coordKey);
                     targetedTaps++;
                     // Brief pause to let the app process the tap
                     await new Promise(r => setTimeout(r, 500));
-                } catch { /* individual tap failure is fine */ }
+                } catch (tapErr) {
+                    log("warn", `  Tap failed at (${el.cx},${el.cy}): ${tapErr.message?.substring(0, 80)}`);
+                }
             }
 
             // Wait for any network calls / UI transitions triggered by the taps
@@ -944,22 +968,22 @@ async function exerciseApp(packageName) {
         // ── Phase 2: Random taps as secondary coverage ──────────────────
         // Catches elements that might not appear as "clickable" in the
         // UIAutomator dump (e.g. custom views, Compose click handlers)
-        const minX = 80, maxX = 1000;
-        const minY = 250, maxY = 1650;
+        const minX = safeBounds.minX + 60, maxX = safeBounds.maxX - 60;
+        const minY = safeBounds.minY + 100, maxY = safeBounds.maxY - 100;
         const actions = [];
 
         for (let i = 0; i < 15; i++) {
-            actions.push(`input tap ${randInt(minX, maxX)} ${randInt(minY, maxY)}`);
+            actions.push(`su -c 'input tap ${randInt(minX, maxX)} ${randInt(minY, maxY)}' 2>/dev/null || input tap ${randInt(minX, maxX)} ${randInt(minY, maxY)}`);
         }
 
         // A few swipes to scroll and reveal hidden content
         for (let i = 0; i < 4; i++) {
-            const x = randInt(200, 800);
-            const y1 = randInt(400, 900);
-            const y2 = randInt(1000, 1400);
+            const x = randInt(Math.floor(screenW * 0.2), Math.floor(screenW * 0.8));
+            const y1 = randInt(Math.floor(screenH * 0.2), Math.floor(screenH * 0.4));
+            const y2 = randInt(Math.floor(screenH * 0.5), Math.floor(screenH * 0.7));
             actions.push(i % 2 === 0
-                ? `input swipe ${x} ${y1} ${x} ${y2} 300`
-                : `input swipe ${x} ${y2} ${x} ${y1} 300`);
+                ? `su -c 'input swipe ${x} ${y1} ${x} ${y2} 300' 2>/dev/null || input swipe ${x} ${y1} ${x} ${y2} 300`
+                : `su -c 'input swipe ${x} ${y2} ${x} ${y1} 300' 2>/dev/null || input swipe ${x} ${y2} ${x} ${y1} 300`);
         }
 
         // Shuffle for natural interaction
