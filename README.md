@@ -232,6 +232,20 @@ wormhole-Shinodroid/
 
 ---
 
+## Dynamic Analysis Execution Phases
+
+When Shinodroid performs dynamic analysis, it executes its Frida scripts in a deliberate sequence to maximize success:
+
+1. **Phase 1: Anti-Tamper & Root Bypass**
+   - Runs `ROOTER.js` and `SHINOBI-RESILIENCE.js` first.
+   - Neutralizes root/tamper checks before the app can `System.exit()`.
+2. **Phase 2: SSL/TLS Pinning Bypass**
+   - After keeping the app alive in Phase 1, it runs `SSL-BYE.js`, `PintooR.js`, and uses `android-unpinner` to allow network interception.
+3. **Phase 3: Behavioral Monitoring**
+   - Finally, passive monitors (`SHINOBI-CRYPTO.js`, `SHINOBI-NETWORK.js`, `SHINOBI-STORAGE.js`, etc.) hook into Android APIs to log activity while the automated UI exerciser taps buttons.
+
+---
+
 ## Environment Variables Reference
 
 | Variable | Required | Description |
