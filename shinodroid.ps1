@@ -31,7 +31,26 @@ $ErrorActionPreference = 'Continue'
 # ==============================================================================
 #  Path Configuration
 # ==============================================================================
-$mobsfPath = 'C:\Mobile-Security-Framework-MobSF'
+function Find-MobSFPath {
+    $dirs = @(
+        $env:MOBSF_PATH,
+        $env:MOBSF_DIR,
+        (Join-Path $env:USERPROFILE "Documents\Mobile-Security-Framework-MobSF"),
+        (Join-Path $env:USERPROFILE "Mobile-Security-Framework-MobSF"),
+        (Join-Path $env:USERPROFILE "Documents\MobSF"),
+        (Join-Path $env:USERPROFILE "MobSF"),
+        "C:\Mobile-Security-Framework-MobSF",
+        "C:\MobSF"
+    )
+    foreach ($d in $dirs) {
+        if ($d -and (Test-Path (Join-Path $d "run.bat"))) {
+            return $d
+        }
+    }
+    return $null
+}
+
+$mobsfPath = Find-MobSFPath
 $rootDir   = $PSScriptRoot
 $webPath   = Join-Path $PSScriptRoot 'web'
 
@@ -166,6 +185,43 @@ function Test-PortOpen {
     }
 }
 
+function Start-MobSFServer {
+    param([int]$WaitSeconds = 40)
+
+    if (Test-PortOpen -Port 8000) {
+        Write-SubStep -Ok "MobSF online at http://localhost:8000"
+        return $true
+    }
+
+    $detectedPath = Find-MobSFPath
+    if (-not $detectedPath) {
+        Write-SubStep -Warn "MobSF not found in common paths"
+        Write-SubStep -Info "Ensure MobSF is installed or set `$env:MOBSF_PATH"
+        return $false
+    }
+
+    Write-SubStep -Info "Starting MobSF server in background ($detectedPath)..."
+    Start-Process cmd.exe -ArgumentList "/k cd /d `"$detectedPath`" && call mobsf-venv\Scripts\activate.bat && run.bat" -WindowStyle Minimized
+
+    Write-SubStep -Info "Waiting for MobSF on port 8000..."
+    $mobsfUp = $false
+    for ($i = 0; $i -lt $WaitSeconds; $i++) {
+        if (Test-PortOpen -Port 8000) {
+            $mobsfUp = $true
+            break
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    if ($mobsfUp) {
+        Write-SubStep -Ok "MobSF online at http://localhost:8000"
+        return $true
+    } else {
+        Write-SubStep -Warn "MobSF still initializing (timed out after ${WaitSeconds}s)"
+        return $false
+    }
+}
+
 function Show-Summary {
     param(
         [string]$DashboardUrl = 'http://localhost:3000',
@@ -214,15 +270,9 @@ if ($SkipAI) {
 if ($Mode -eq 'scan') {
     Write-Step -Step 1 -Total 2 -Message "Verifying scan prerequisites..."
 
-    # Check MobSF
-    $mobsfUp = Test-PortOpen -Port 8000
-    if ($mobsfUp) {
-        Write-SubStep -Ok "MobSF online at http://localhost:8000"
-        $mobsfSummaryStatus = "ONLINE"
-    } else {
-        Write-SubStep -Warn "MobSF unreachable at http://localhost:8000 (Static analysis will fail)"
-        $mobsfSummaryStatus = "OFFLINE"
-    }
+    # Check & Auto-start MobSF
+    $mobsfUp = Start-MobSFServer -WaitSeconds 35
+    $mobsfSummaryStatus = if ($mobsfUp) { "ONLINE" } else { "OFFLINE" }
 
     # Check Emulator
     $devices = cmd /c "adb devices 2>&1"
@@ -271,7 +321,8 @@ if ($Mode -eq 'scan') {
 if ($Mode -eq 'worker') {
     Write-Step -Step 1 -Total 1 -Message "Starting Shinodroid daemon worker..."
     
-    $mobsfUp = Test-PortOpen -Port 8000
+    # Check & Auto-start MobSF
+    $mobsfUp = Start-MobSFServer -WaitSeconds 35
     $mobsfSummaryStatus = if ($mobsfUp) { "ONLINE" } else { "OFFLINE" }
 
     $devices = cmd /c "adb devices 2>&1"
@@ -402,38 +453,8 @@ if ($Docker) {
     $mobsfSummaryStatus = "ONLINE"
 } else {
     # --- Local Mode ---
-    if (Test-PortOpen -Port 8000) {
-        Write-SubStep -Ok "MobSF online at http://localhost:8000 (already active)"
-        $mobsfSummaryStatus = "ONLINE"
-    } elseif (Test-Path "$mobsfPath\run.bat") {
-        Write-SubStep -Info "Starting MobSF server (new terminal)..."
-        Start-Process powershell -ArgumentList @(
-            "-NoExit", "-Command",
-            "Set-Location '$mobsfPath'; & '.\mobsf-venv\Scripts\Activate.ps1'; & '.\run.bat'"
-        )
-
-        Write-SubStep -Info "Waiting for MobSF on port 8000..."
-        $mobsfUp = $false
-        for ($i = 0; $i -lt 30; $i++) {
-            if (Test-PortOpen -Port 8000) {
-                $mobsfUp = $true
-                break
-            }
-            Start-Sleep -Seconds 2
-        }
-
-        if ($mobsfUp) {
-            Write-SubStep -Ok "MobSF online at http://localhost:8000"
-            $mobsfSummaryStatus = "ONLINE"
-        } else {
-            Write-SubStep -Warn "MobSF may still be starting (timed out waiting on port 8000)"
-            $mobsfSummaryStatus = "ONLINE"
-        }
-    } else {
-        Write-SubStep -Warn "MobSF not found at: $mobsfPath"
-        Write-SubStep -Info "Static analysis will not work without MobSF"
-        $mobsfSummaryStatus = "OFFLINE"
-    }
+    $mobsfUp = Start-MobSFServer -WaitSeconds 40
+    $mobsfSummaryStatus = if ($mobsfUp) { "ONLINE" } else { "OFFLINE" }
 
     # Check OWASP ZAP Daemon
     $zapPath = "C:\Program Files\ZAP\Zed Attack Proxy\zap.bat"

@@ -20,7 +20,11 @@ async function main() {
 
     // ── 2. Pre-flight Checks (with spinners) ──
     const mobsfSpinner = Logger.spinner("Probing MobSF core service...");
-    const isMobsfUp = await MobSfService.isAlive();
+    let isMobsfUp = await MobSfService.isAlive();
+    if (!isMobsfUp) {
+        mobsfSpinner.update("MobSF is offline — auto-starting MobSF server...");
+        isMobsfUp = await MobSfService.ensureRunning();
+    }
     if (isMobsfUp) {
         mobsfSpinner.succeed(`MobSF service connected at ${Config.MOBSF_URL}`);
     } else {

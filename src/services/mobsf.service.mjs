@@ -1,3 +1,7 @@
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { Config } from "../config/config.mjs";
 import { safeFetch } from "../utils/helpers.mjs";
 
@@ -7,6 +11,33 @@ export class MobSfService {
             Authorization: Config.MOBSF_API_KEY,
             ...extra
         };
+    }
+
+    /**
+     * Finds the local MobSF installation directory by probing common locations.
+     * @returns {string|null}
+     */
+    static findMobSfDir() {
+        const home = homedir();
+        const candidates = [
+            process.env.MOBSF_PATH,
+            process.env.MOBSF_DIR,
+            join(home, "Documents", "Mobile-Security-Framework-MobSF"),
+            join(home, "Mobile-Security-Framework-MobSF"),
+            join(home, "Documents", "MobSF"),
+            join(home, "MobSF"),
+            "C:\\Mobile-Security-Framework-MobSF",
+            "C:\\MobSF",
+        ].filter(Boolean);
+
+        for (const dir of candidates) {
+            try {
+                if (existsSync(join(dir, "run.bat"))) {
+                    return dir;
+                }
+            } catch { /* ignore permission errors */ }
+        }
+        return null;
     }
 
     /**
@@ -21,6 +52,51 @@ export class MobSfService {
         } catch {
             return false;
         }
+    }
+
+    /**
+     * Checks if MobSF is running; if not, automatically launches it in the background
+     * and waits up to maxWaitSeconds for the REST API to become responsive.
+     * 
+     * @param {number} maxWaitSeconds
+     * @returns {Promise<boolean>}
+     */
+    static async ensureRunning(maxWaitSeconds = 40) {
+        if (await this.isAlive()) return true;
+
+        const mobsfDir = this.findMobSfDir();
+        if (!mobsfDir) {
+            return false;
+        }
+
+        if (process.platform === "win32") {
+            try {
+                const child = spawn("cmd.exe", [
+                    "/c",
+                    "start",
+                    "MobSF Core Service",
+                    "/min",
+                    "cmd.exe",
+                    "/k",
+                    `cd /d "${mobsfDir}" && call mobsf-venv\\Scripts\\activate.bat && run.bat`
+                ], {
+                    detached: true,
+                    stdio: "ignore"
+                });
+                child.unref();
+            } catch {
+                return false;
+            }
+        }
+
+        // Wait for MobSF to bind and respond to REST requests
+        for (let i = 0; i < maxWaitSeconds; i++) {
+            await new Promise(r => setTimeout(r, 1000));
+            if (await this.isAlive()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     static async fetchRecentScans(limit = 5) {
