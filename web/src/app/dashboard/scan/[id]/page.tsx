@@ -89,8 +89,72 @@ function DynamicStatusBadge({ status }: { status: string | null | undefined }) {
     );
 }
 
+function cleanFridaWebOutput(rawLines: string[]): string[] {
+    if (!rawLines || !Array.isArray(rawLines)) return [];
+    const joined = rawLines.map(l => String(l).replace(/\r/g, "")).join("\n");
+    const normalized = joined
+        .replace(/message:\s*\n\s*\{/g, "message: {")
+        .replace(/data:\s*\n\s*None/g, "data: None")
+        .replace(/\}\s*\ndata:\s*None/g, "} data: None");
+
+    const lines = normalized.split("\n").map(l => l.trim()).filter(Boolean);
+    const cleaned: string[] = [];
+
+    for (const line of lines) {
+        if (
+            line.startsWith("____") || line.startsWith("/ _") || line.startsWith("| (_") ||
+            line.startsWith("> _") || line.startsWith("/_/") || line.startsWith(". . .") ||
+            line.startsWith("Commands:") || line.startsWith("help") || line.startsWith("object?") ||
+            line.startsWith("exit/quit") || line.startsWith("More info") || line.includes("frida.re/docs") ||
+            line.includes("Prefer a GUI?") || line.includes("luma.frida.re") ||
+            line.includes("Connected to Android Emulator") ||
+            line.startsWith("Spawning `") || line.startsWith("Spawned `") ||
+            line.startsWith("[Android Emulator") || line === "%resume" ||
+            line === "data: None" || line === "None"
+        ) continue;
+
+        if (/^([=\-_*#~])\1{5,}$/.test(line)) continue;
+
+        if (
+            line.includes("/frida/bridges/java.js") ||
+            line.includes("at apply (native)") ||
+            line.includes("at _performPendingVmOps") ||
+            (line.startsWith("at <anonymous>") && (line.includes("PintooR.js") || line.includes("frida")))
+        ) continue;
+
+        const sendMatch = line.match(/message:\s*\{['"]type['"]:\s*['"]send['"],\s*['"]payload['"]:\s*(['"]?)(.*?)\1\s*\}\s*(?:data:\s*None)?$/);
+        if (sendMatch) {
+            const payload = sendMatch[2].trim().replace(/\\'/g, "'").replace(/\\"/g, '"');
+            if (payload.toLowerCase().includes("bypass root check for package:")) {
+                cleaned.push(`[ROOT BYPASS] Neutralized root check for: ${payload.split("package:")[1]?.trim() || ""}`);
+            } else if (payload.toLowerCase().includes("bypass return value for binary:")) {
+                cleaned.push(`[ROOT BYPASS] Neutralized binary check for: ${payload.split("binary:")[1]?.trim() || ""}`);
+            } else if (payload.toLowerCase().includes("ssl") || payload.toLowerCase().includes("pinning") || payload.toLowerCase().includes("cert")) {
+                cleaned.push(`[SSL BYPASS] ${payload}`);
+            } else if (payload.toLowerCase().includes("loaded") && payload.toLowerCase().includes("classes")) {
+                cleaned.push(`[INIT] Runtime initialized — ${payload}`);
+            } else if (payload.toLowerCase().includes("hook not loaded")) {
+                cleaned.push(`[INFO] Hook skipped (not present in target): ${payload.replace(" hook not loaded", "")}`);
+            } else {
+                cleaned.push(`[HOOK] ${payload}`);
+            }
+            continue;
+        }
+
+        if (line.startsWith("TypeError: not a function")) {
+            cleaned.push("[WARN] Optional API hook skipped (signature mismatch on target Android OS)");
+            continue;
+        }
+
+        cleaned.push(line);
+    }
+    return cleaned;
+}
+
 function FridaScriptCard({ script }: { script: FridaScript }) {
     const [open, setOpen] = useState(false);
+    const cleanedOutput = cleanFridaWebOutput(script.output);
+
     return (
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
             <button
@@ -112,22 +176,21 @@ function FridaScriptCard({ script }: { script: FridaScript }) {
                     </span>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{script.outputLines} lines</span>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{cleanedOutput.length} events</span>
                     {open ? <ChevronUp size={14} style={{ color: "var(--text-muted)" }} /> : <ChevronDown size={14} style={{ color: "var(--text-muted)" }} />}
                 </div>
             </button>
             {open && (
                 <div style={{ borderTop: "1px solid var(--border)", padding: "12px 16px" }}>
-                    {script.output.length === 0 ? (
+                    {cleanedOutput.length === 0 ? (
                         <p style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>No output captured.</p>
                     ) : (
                         <pre style={{
                             fontFamily: "monospace", fontSize: "0.75rem", lineHeight: 1.6,
                             color: "#a3e635", background: "#0a0a0f", padding: 12, borderRadius: 8,
-                            overflowX: "auto", maxHeight: 300, overflowY: "auto", whiteSpace: "pre-wrap"
+                            overflowX: "auto", maxHeight: 420, overflowY: "auto", whiteSpace: "pre-wrap"
                         }}>
-                            {script.output.slice(0, 200).join("\n")}
-                            {script.output.length > 200 && `\n... and ${script.output.length - 200} more lines`}
+                            {cleanedOutput.map((l, i) => `${String(i + 1).padStart(3, "0")} │ ${l}`).join("\n")}
                         </pre>
                     )}
                 </div>
