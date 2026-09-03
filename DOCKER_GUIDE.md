@@ -1,4 +1,4 @@
-# Shinodroid 忍ドロイド — Docker Setup Guide
+# Shinodroid — Docker Setup Guide
 
 > **Get the entire Shinodroid security analysis pipeline running with just 3 commands.**
 > No manual installation of MobSF, ZAP, Ollama, or Python required — Docker handles everything.

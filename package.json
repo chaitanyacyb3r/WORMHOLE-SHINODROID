@@ -1,7 +1,7 @@
 {
   "name": "wormhole-Shinodroid",
   "version": "1.0.0",
-  "description": "WORMHOLE // Shinodroid 忍ドロイド — Automated Android pentesting pipeline (MobSF + Frida + BrutDroid)",
+  "description": "WORMHOLE // Shinodroid — Automated Android pentesting pipeline (MobSF + Frida + BrutDroid)",
   "type": "module",
   "private": true,
   "main": "src/daemon.mjs",

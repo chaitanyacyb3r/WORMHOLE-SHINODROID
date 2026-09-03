@@ -1,4 +1,4 @@
-# 📐 ARCHITECTURE.md — WORMHOLE // Shinodroid 忍ドロイド
+# 📐 ARCHITECTURE.md — WORMHOLE // Shinodroid
 
 > **Version:** 2.0.0 &nbsp;|&nbsp; **Last Updated:** 2026-08-13 &nbsp;|&nbsp; **Maintainer:** Shinodroid Team
 
@@ -25,7 +25,7 @@
 
 ### 1.1 Purpose
 
-**WORMHOLE // Shinodroid 忍ドロイド** is an automated Android application security analysis platform that orchestrates multiple industry tools through a unified daemon service and plugin-based engine architecture. Drop an APK — it runs every analysis tool automatically and produces a professional, documented security report.
+**WORMHOLE // Shinodroid** is an automated Android application security analysis platform that orchestrates multiple industry tools through a unified daemon service and plugin-based engine architecture. Drop an APK — it runs every analysis tool automatically and produces a professional, documented security report.
 
 ### 1.2 Key Capabilities
 
@@ -706,4 +706,4 @@ cd web && npm run dev
 
 ---
 
-*WORMHOLE // Shinodroid 忍ドロイド — Built for Android Security Research*
+*WORMHOLE // Shinodroid — Built for Android Security Research*

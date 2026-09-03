@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# Shinodroid 忍ドロイド — Docker Compose (Production)
+# Shinodroid — Docker Compose (Production)
 #
 # Usage:
 #   docker compose -f docker-compose.yml up -d   # Start all services

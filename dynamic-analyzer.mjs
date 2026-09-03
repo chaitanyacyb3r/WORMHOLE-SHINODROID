@@ -1,5 +1,5 @@
 /**
- * Shinodroid 忍ドロイド — Dynamic Analyzer Module (Frida + ADB)
+ * Shinodroid — Dynamic Analyzer Module (Frida + ADB)
  *
  * Pipeline:
  *   1. Check for connected emulator (auto-launch if missing)

@@ -8,7 +8,7 @@ text
 ╔══════════════════════════════════════════════════════════════════════════════════╗
 ║              CONFIDENTIAL — WORMHOLE Security                                  ║
 ║                                                                                ║
-║   Product:   Shinodroid 忍ドロイド                                               ║
+║   Product:   Shinodroid                                               ║
 ║   Version:   1.0.0                                                             ║
 ║   Document:  Software Requirements Specification (SRS)                         ║
 ║   Standard:  IEEE 830-2024                                                     ║
@@ -22,7 +22,7 @@ text
 |Field|Value|
 |---|---|
 |**Document ID**|WORMHOLE-SRS-SHINODROID-1.0.0|
-|**Product Name**|Shinodroid 忍ドロイド|
+|**Product Name**|Shinodroid|
 |**Organization**|WORMHOLE Security|
 |**Product Version**|1.0.0|
 |**Document Version**|1.0.0|
@@ -104,7 +104,7 @@ _`CONFIDENTIAL — WORMHOLE Security | Shinodroid SRS v1.0.0`_
 
 ## 1.1 Purpose
 
-This Software Requirements Specification (SRS) document formally defines and specifies all requirements for **Shinodroid 忍ドロイド**, Version 1.0.0, developed by WORMHOLE Security. It is prepared in conformance with IEEE Standard 830-2024, _IEEE Recommended Practice for Software Requirements Specifications_.
+This Software Requirements Specification (SRS) document formally defines and specifies all requirements for **Shinodroid**, Version 1.0.0, developed by WORMHOLE Security. It is prepared in conformance with IEEE Standard 830-2024, _IEEE Recommended Practice for Software Requirements Specifications_.
 
 This document serves as the authoritative contractual and technical reference for:
 
@@ -120,7 +120,7 @@ The SRS establishes a shared understanding between WORMHOLE Security and all sta
 
 ## 1.2 Scope
 
-**Product Name:** Shinodroid 忍ドロイド **Organization:** WORMHOLE Security **Version:** 1.0.0
+**Product Name:** Shinodroid **Organization:** WORMHOLE Security **Version:** 1.0.0
 
 
 ### What Shinodroid Does
@@ -1885,7 +1885,7 @@ graph LR
     EXEC(["Executive"])
 
     subgraph "SHINODROID SYSTEM"
-        SYSTEM["🥷 SHINODROID\n忍ドロイド\n\nAI-Powered Android\nSecurity Analysis Platform"]
+        SYSTEM["🥷 SHINODROID\n\n\nAI-Powered Android\nSecurity Analysis Platform"]
     end
 
     ANALYST -->|"APK File\nvia Web Dashboard"| SYSTEM
@@ -2152,7 +2152,7 @@ text
 ╔══════════════════════════════════════════════════════════════════════════════════╗
 ║                        DOCUMENT END                                            ║
 ║                                                                                ║
-║   Shinodroid 忍ドロイド — Software Requirements Specification                   ║
+║   Shinodroid — Software Requirements Specification                   ║
 ║   IEEE 830-2024 Compliant | Version 1.0.0                                      ║
 ║   CONFIDENTIAL — WORMHOLE Security                                             ║
 ║                                                                                ║

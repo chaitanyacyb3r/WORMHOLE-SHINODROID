@@ -1,5 +1,5 @@
 /**
- * WORMHOLE // Shinodroid 忍ドロイド
+ * WORMHOLE // Shinodroid
  * Enhanced Cyberpunk Logger & Terminal UI Utility
  */
 
@@ -97,7 +97,7 @@ export class Logger {
         console.log(boxLine(`${ANSI.brightCyan}${ANSI.bold} ███████║██║  ██║██║██║ ╚████║╚██████╔╝██████╔╝██║  ██║╚██████╔╝██║██████╔╝${ANSI.reset}`, innerWidth, ANSI.cyan));
         console.log(boxLine(`${ANSI.brightCyan}${ANSI.bold} ╚══════╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝╚═════╝ ${ANSI.reset}`, innerWidth, ANSI.cyan));
         console.log(`${ANSI.cyan}╠${topBorder}╣${ANSI.reset}`);
-        console.log(boxLine(`${ANSI.magenta}${ANSI.bold}WORMHOLE // Shinodroid 忍ドロイド${ANSI.reset} ── ${ANSI.white}Unified Daemon Service${ANSI.reset}`, innerWidth, ANSI.cyan));
+        console.log(boxLine(`${ANSI.magenta}${ANSI.bold}WORMHOLE // Shinodroid${ANSI.reset} ── ${ANSI.white}Unified Daemon Service${ANSI.reset}`, innerWidth, ANSI.cyan));
         console.log(boxLine(`${ANSI.gray}Automated Mobile Pentesting Framework • MobSF + Frida + BrutDroid + AI${ANSI.reset}`, innerWidth, ANSI.cyan));
         console.log(`${ANSI.cyan}╚${topBorder}╝${ANSI.reset}`);
         console.log();
@@ -280,7 +280,7 @@ export class Logger {
         console.log(`${ANSI.brightRed}╔${border}╗${ANSI.reset}`);
         console.log(boxLine(`${ANSI.bold}${ANSI.brightWhite}[WORMHOLE // SHINODROID]${ANSI.reset} Graceful Shutdown Initiated`, innerWidth, ANSI.brightRed));
         console.log(boxLine(`${ANSI.brightYellow}Signal: ${sig}${ANSI.reset} ── Closing active listeners and pollers...`, innerWidth, ANSI.brightRed));
-        console.log(boxLine(`${ANSI.gray}All processes stopped safely. Goodbye! 忍${ANSI.reset}`, innerWidth, ANSI.brightRed));
+        console.log(boxLine(`${ANSI.gray}All processes stopped safely. Goodbye!${ANSI.reset}`, innerWidth, ANSI.brightRed));
         console.log(`${ANSI.brightRed}╚${border}╝${ANSI.reset}`);
         console.log();
     }

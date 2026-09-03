@@ -1,6 +1,6 @@
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════════════════
-# Shinodroid 忍ドロイド — Production Startup Script
+# Shinodroid — Production Startup Script
 #
 # This script:
 #   1. Validates the environment configuration

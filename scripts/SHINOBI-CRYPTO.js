@@ -1,6 +1,6 @@
 // ================================================================
 // SHINOBI-CRYPTO.js — Cryptographic Operations Monitor
-// Shinodroid 忍ドロイド — MASVS-CRYPTO (M5)
+// Shinodroid — MASVS-CRYPTO (M5)
 //
 // Hooks all javax.crypto, java.security, and Android Keystore
 // operations. Detects weak algorithms, insecure modes, hardcoded

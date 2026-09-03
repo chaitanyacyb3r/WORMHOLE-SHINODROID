@@ -1,5 +1,5 @@
 ﻿# ==============================================================================
-#  WORMHOLE // Shinodroid 忍ドロイド — Unified Master Launcher
+#  WORMHOLE // Shinodroid — Unified Master Launcher
 # ==============================================================================
 #  Automated Android Security Analysis Platform (MobSF + Frida + Convex + Next.js)
 #

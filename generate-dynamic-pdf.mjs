@@ -1,5 +1,5 @@
 /**
- * Shinodroid 忍ドロイド — Dynamic Analysis PDF Report Generator
+ * Shinodroid — Dynamic Analysis PDF Report Generator
  *
  * Takes the Frida results JSON and produces a professionally styled PDF
  * with script outputs, findings summary, and OWASP-aligned recommendations.
