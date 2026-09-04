@@ -39,6 +39,10 @@ const ADB = "adb";
 // android-unpinner command
 const UNPINNER = "android-unpinner";
 
+// kill_flutter tool path (Flutter SSL pinning bypass via BoringSSL offset analysis)
+const KILL_FLUTTER_SCRIPT = join(__dirname, "tools", "kill_flutter", "kill_flutter.py");
+const PYTHON = process.platform === "win32" ? "python" : "python3";
+
 // Android SDK build-tools (for zipalign)
 const BUILD_TOOLS = join(
     process.env.ANDROID_HOME || join(process.env.LOCALAPPDATA || "", "Android", "Sdk"),
@@ -588,6 +592,343 @@ async function ensureFridaServer() {
     return false;
 }
 
+// ── Flutter Detection ───────────────────────────────────────────────────────
+
+/**
+ * Detect whether an APK is a Flutter app by checking for libflutter.so inside.
+ *
+ * Uses `aapt list` or `unzip -l` to enumerate entries without extracting.
+ * @param {string} apkPath
+ * @returns {Promise<{ isFlutter: boolean, arches: string[] }>}
+ */
+async function detectFlutterApp(apkPath) {
+    const result = { isFlutter: false, arches: [] };
+
+    // Try aapt list first (faster, no extraction)
+    for (const tool of ["aapt", "aapt2"]) {
+        try {
+            const { stdout } = await execFileAsync(tool, ["list", apkPath], {
+                timeout: 30_000,
+                maxBuffer: 10 * 1024 * 1024,
+            });
+            const lines = stdout.split("\n");
+            for (const line of lines) {
+                const match = line.match(/lib\/([^/]+)\/libflutter\.so/);
+                if (match) {
+                    result.isFlutter = true;
+                    if (!result.arches.includes(match[1])) result.arches.push(match[1]);
+                }
+            }
+            if (result.isFlutter) return result;
+        } catch { /* tool not available, try next */ }
+    }
+
+    // Fallback: read APK binary and search for libflutter.so ZIP entries
+    // APK is a ZIP file — entry paths appear as plain ASCII in the central directory.
+    // Reading the file as latin1 preserves all bytes and lets us regex-match paths.
+    try {
+        const buf = await readFile(apkPath);
+        const str = buf.toString("latin1");
+        const re = /lib\/([^\/\x00]+)\/libflutter\.so/g;
+        let m;
+        while ((m = re.exec(str)) !== null) {
+            result.isFlutter = true;
+            if (!result.arches.includes(m[1])) result.arches.push(m[1]);
+        }
+    } catch (err) {
+        log("warn", `Flutter detection fallback failed: ${err.message}`);
+    }
+
+    return result;
+}
+
+// ── Device Type Detection ───────────────────────────────────────────────────
+
+/**
+ * Detect whether the connected ADB device is an emulator or a physical device.
+ * Returns the device type and the appropriate Burp proxy IP.
+ *
+ * Emulators: ro.hardware contains "goldfish", "ranchu", or "sdk", or
+ *            ro.product.model contains "sdk" or "Emulator".
+ * Physical:  everything else.
+ *
+ * @returns {Promise<{ isEmulator: boolean, proxyIp: string, deviceArch: string }>}
+ */
+async function detectDeviceType() {
+    const result = { isEmulator: false, proxyIp: "127.0.0.1", deviceArch: "arm64-v8a" };
+
+    try {
+        const { stdout: hw } = await execFileAsync(ADB, adb("shell", "getprop", "ro.hardware"), { timeout: 5000 });
+        const { stdout: model } = await execFileAsync(ADB, adb("shell", "getprop", "ro.product.model"), { timeout: 5000 });
+        const { stdout: abi } = await execFileAsync(ADB, adb("shell", "getprop", "ro.product.cpu.abi"), { timeout: 5000 });
+
+        const hwVal = hw.trim().toLowerCase();
+        const modelVal = model.trim().toLowerCase();
+        const abiVal = abi.trim().toLowerCase();
+
+        // Map device ABI to Flutter's lib/ directory naming
+        if (abiVal.includes("arm64") || abiVal.includes("aarch64")) {
+            result.deviceArch = "arm64-v8a";
+        } else if (abiVal.includes("x86_64")) {
+            result.deviceArch = "x86_64";
+        } else if (abiVal.includes("armeabi") || abiVal.includes("arm")) {
+            result.deviceArch = "armeabi-v7a";
+        } else if (abiVal.includes("x86")) {
+            result.deviceArch = "x86";
+        }
+
+        // Emulator detection heuristics
+        const emulatorPatterns = ["goldfish", "ranchu", "sdk", "emulator", "generic"];
+        result.isEmulator = emulatorPatterns.some(p => hwVal.includes(p) || modelVal.includes(p));
+
+        if (result.isEmulator) {
+            // Inside an emulator, 10.0.2.2 is the host machine's loopback
+            result.proxyIp = process.env.BURP_PROXY_IP || "10.0.2.2";
+        } else {
+            // Physical device: need the host machine's LAN IP
+            // Try to auto-detect from the ADB connection's host IP
+            result.proxyIp = process.env.BURP_PROXY_IP || await getHostLanIp();
+        }
+
+        log("info", `Device type: ${result.isEmulator ? "EMULATOR" : "PHYSICAL"}, ` +
+            `ABI: ${result.deviceArch}, Proxy IP: ${result.proxyIp}`);
+    } catch (err) {
+        log("warn", `Device type detection failed: ${err.message}`);
+    }
+
+    return result;
+}
+
+/**
+ * Auto-detect host machine's LAN IP for Burp proxy redirection on physical devices.
+ * Tries multiple methods across Windows / macOS / Linux.
+ * @returns {Promise<string>}
+ */
+async function getHostLanIp() {
+    // Method 1: Use Node's os.networkInterfaces()
+    const { networkInterfaces } = await import("node:os");
+    const interfaces = networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            // Skip loopback, internal, and IPv6
+            if (iface.internal || iface.family !== "IPv4") continue;
+            // Prefer common LAN ranges
+            if (iface.address.startsWith("192.168.") ||
+                iface.address.startsWith("10.") ||
+                iface.address.startsWith("172.")) {
+                return iface.address;
+            }
+        }
+    }
+
+    log("warn", "Could not auto-detect host LAN IP — defaulting to 192.168.1.1. " +
+        "Set BURP_PROXY_IP env variable to override.");
+    return "192.168.1.1";
+}
+
+// ── kill_flutter Integration ────────────────────────────────────────────────
+
+/**
+ * Run kill_flutter.py against an APK to extract the BoringSSL hook offset
+ * and generate a Frida bypass script.
+ *
+ * @param {string} apkPath     - Path to the APK
+ * @param {string} arch        - Target ABI (arm64-v8a, x86_64, armeabi-v7a)
+ * @param {string} outDir      - Directory to write generated files
+ * @param {string} packageName - App package name (piped to stdin if aapt fails)
+ * @param {string} proxyIp     - Burp proxy IP for iptables commands
+ * @param {number} proxyPort   - Burp proxy port
+ * @returns {Promise<{ success: boolean, scriptPath?: string, offset?: string, error?: string }>}
+ */
+async function runKillFlutter(apkPath, arch, outDir, packageName, proxyIp = "10.0.2.2", proxyPort = 8080) {
+    try {
+        await access(KILL_FLUTTER_SCRIPT);
+    } catch {
+        return { success: false, error: "kill_flutter.py not found at: " + KILL_FLUTTER_SCRIPT };
+    }
+
+    const kfOutDir = join(outDir, "kill_flutter");
+    try { await mkdir(kfOutDir, { recursive: true }); } catch { /* exists */ }
+
+    log("info", `[kill_flutter] Running against ${basename(apkPath)} (arch: ${arch})...`);
+
+    // Find aapt/aapt2 from Android SDK build-tools and add to PATH
+    let envPath = process.env.PATH || "";
+    const sdkRoot = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT
+        || (process.platform === "win32"
+            ? join(process.env.LOCALAPPDATA || "", "Android", "Sdk")
+            : "");
+    if (sdkRoot) {
+        try {
+            const btDir = join(sdkRoot, "build-tools");
+            const versions = (await readdir(btDir)).sort().reverse();
+            for (const ver of versions) {
+                const btPath = join(btDir, ver);
+                envPath = btPath + (process.platform === "win32" ? ";" : ":") + envPath;
+                break; // Use newest version
+            }
+            log("info", `[kill_flutter] Added build-tools to PATH for aapt`);
+        } catch { /* no build-tools found */ }
+    }
+
+    // Use spawn instead of execFileAsync so we can pipe packageName to stdin
+    // (kill_flutter prompts for manual input when aapt is not on PATH)
+    return new Promise((resolve) => {
+        const output = [];
+        const proc = spawn(PYTHON, [
+            KILL_FLUTTER_SCRIPT,
+            apkPath,
+            "--arch", arch,
+            "-i", proxyIp,
+            "-p", String(proxyPort),
+            "-o", kfOutDir,
+        ], {
+            stdio: ["pipe", "pipe", "pipe"],
+            env: { ...process.env, PYTHONIOENCODING: "utf-8", PATH: envPath },
+            timeout: 120_000,
+        });
+
+        proc.stdout.on("data", (data) => {
+            const text = data.toString();
+            output.push(text);
+            // If kill_flutter asks for package name, pipe it
+            if (text.includes("Enter package name") || text.includes("package name manually")) {
+                log("info", `[kill_flutter] Piping package name: ${packageName}`);
+                try { proc.stdin.write(packageName + "\n"); } catch { /* ignore */ }
+            }
+        });
+
+        proc.stderr.on("data", (data) => {
+            output.push(data.toString());
+        });
+
+        const timer = setTimeout(() => {
+            try { proc.kill("SIGTERM"); } catch { }
+            resolve({ success: false, error: "kill_flutter timed out after 120s" });
+        }, 120_000);
+
+        proc.on("close", async (code) => {
+            clearTimeout(timer);
+            const allOutput = output.join("");
+            log("info", `[kill_flutter] Output (exit ${code}):\n${allOutput.substring(0, 1500)}`);
+
+            // Parse the offset from output
+            const offsetMatch = allOutput.match(/SSL verify offset.*?:\s*(0x[0-9a-fA-F]+)/);
+            const offset = offsetMatch ? offsetMatch[1] : null;
+
+            // Find the generated Frida script
+            const bypassScriptPath = join(kfOutDir, "flutter_bypass.js");
+            try {
+                await access(bypassScriptPath);
+                log("ok", `[kill_flutter] Frida bypass script generated: ${bypassScriptPath}`);
+                log("ok", `[kill_flutter] Hook offset: ${offset || "unknown"}`);
+                resolve({ success: true, scriptPath: bypassScriptPath, offset, output: allOutput });
+            } catch {
+                // kill_flutter didn't produce the expected file — generate one manually from the offset
+                if (offset) {
+                    const manualScript = generateFlutterBypassScript(offset);
+                    await writeFile(bypassScriptPath, manualScript, "utf-8");
+                    log("ok", `[kill_flutter] Generated manual bypass script from offset ${offset}`);
+                    resolve({ success: true, scriptPath: bypassScriptPath, offset, output: allOutput });
+                } else {
+                    log("error", `[kill_flutter] No offset found. Full output:\n${allOutput}`);
+                    resolve({ success: false, error: "kill_flutter ran but no bypass script or offset was produced", output: allOutput });
+                }
+            }
+        });
+
+        proc.on("error", (err) => {
+            clearTimeout(timer);
+            log("error", `[kill_flutter] Process error: ${err.message}`);
+            resolve({ success: false, error: err.message });
+        });
+    });
+}
+
+/**
+ * Generate a Frida script that hooks BoringSSL's SSL verify function at a known offset.
+ * @param {string} offset - Hex offset (e.g., "0x73ee8c")
+ * @returns {string}
+ */
+function generateFlutterBypassScript(offset) {
+    return `/**
+ * Flutter SSL Pinning Bypass — generated by Shinodroid + kill_flutter
+ * Hooks ssl_crypto_x509_session_verify_cert_chain in libflutter.so
+ * Offset: ${offset}
+ */
+'use strict';
+
+function bypass() {
+    var moduleName = "libflutter.so";
+    var m = Process.findModuleByName(moduleName);
+    if (!m) {
+        console.log("[!] Module " + moduleName + " not found — retrying in 1s...");
+        setTimeout(bypass, 1000);
+        return;
+    }
+
+    var offset = ${offset};
+    var addr = m.base.add(offset);
+    console.log("[+] libflutter.so base: " + m.base);
+    console.log("[+] Hooking ssl_verify at: " + addr + " (offset " + offset.toString(16) + ")");
+    console.log("[SSL_HOOK_INSTALLED] Flutter BoringSSL ssl_crypto_x509_session_verify_cert_chain");
+
+    Interceptor.attach(addr, {
+        onLeave: function (retval) {
+            retval.replace(0x1);
+            console.log("[SSL_BYPASS_CONFIRMED] BoringSSL cert verification bypassed — returned SUCCESS");
+        }
+    });
+
+    console.log("[+] Flutter SSL bypass ACTIVE — all certificates will be trusted");
+}
+
+setTimeout(bypass, 500);
+`;
+}
+
+// ── iptables Helpers (for Flutter traffic redirection) ──────────────────────
+
+/**
+ * Set up iptables DNAT rules on the device to redirect all TCP 443/80 traffic
+ * to the Burp proxy. Required for Flutter apps that ignore system proxy settings.
+ *
+ * @param {string} proxyIp
+ * @param {number} proxyPort
+ */
+async function setupIptablesRedirect(proxyIp, proxyPort) {
+    const rules = [
+        `iptables -t nat -A OUTPUT -p tcp --dport 443 -j DNAT --to-destination ${proxyIp}:${proxyPort}`,
+        `iptables -t nat -A OUTPUT -p tcp --dport 80  -j DNAT --to-destination ${proxyIp}:${proxyPort}`,
+    ];
+
+    for (const rule of rules) {
+        try {
+            await execFileAsync(ADB, adb("shell", "su", "-c", rule), { timeout: 10_000 });
+        } catch (err) {
+            log("warn", `iptables setup failed: ${err.message}`);
+        }
+    }
+    log("ok", `[iptables] DNAT rules set: TCP 80/443 → ${proxyIp}:${proxyPort}`);
+}
+
+/**
+ * Revert iptables DNAT rules set by setupIptablesRedirect().
+ */
+async function revertIptablesRedirect(proxyIp, proxyPort) {
+    const rules = [
+        `iptables -t nat -D OUTPUT -p tcp --dport 443 -j DNAT --to-destination ${proxyIp}:${proxyPort}`,
+        `iptables -t nat -D OUTPUT -p tcp --dport 80  -j DNAT --to-destination ${proxyIp}:${proxyPort}`,
+    ];
+
+    for (const rule of rules) {
+        try {
+            await execFileAsync(ADB, adb("shell", "su", "-c", rule), { timeout: 10_000 });
+        } catch { /* rule might not exist — that's fine */ }
+    }
+    log("info", `[iptables] DNAT rules reverted`);
+}
+
 /**
  * Run a single Frida script against a package and capture output.
  *
@@ -654,6 +995,7 @@ function runFridaScript(packageName, scriptPath, scriptName) {
                     "-U",
                     "-f", packageName,
                     "-l", scriptPath,
+                    "--no-pause",
                 ], {
                     stdio: ["pipe", "pipe", "pipe"],
                     timeout: FRIDA_SCRIPT_TIMEOUT + 5000,
@@ -675,20 +1017,11 @@ function runFridaScript(packageName, scriptPath, scriptName) {
                     }
                 });
 
-                // After 1.5s (script loaded, hooks installed), resume the app
-                // by writing %resume to Frida's REPL stdin
-                const resumeDelay = setTimeout(() => {
-                    if (!spawnFailed && proc.stdin?.writable) {
-                        try {
-                            proc.stdin.write("%resume\n");
-                        } catch { /* ignore write errors on dead proc */ }
-                    }
-                }, 1500);
-
-                // After 6s (app resumed + running), exercise with monkey
+                // --no-pause resumes the app automatically after script load.
+                // After 4s (app resumed + running), exercise with monkey
                 const monkeyDelay = setTimeout(() => {
                     if (!spawnFailed) exerciseApp(packageName).catch(() => { });
-                }, 6000);
+                }, 4000);
 
                 const timer = setTimeout(() => {
                     timedOut = true;
@@ -698,7 +1031,6 @@ function runFridaScript(packageName, scriptPath, scriptName) {
                 proc.on("close", (code) => {
                     clearTimeout(timer);
                     clearTimeout(monkeyDelay);
-                    clearTimeout(resumeDelay);
                     resolveSpawn({
                         success: !spawnFailed && (timedOut || code === 0),
                         spawnFailed,
@@ -1176,6 +1508,11 @@ function parseOutputToFindings(scriptResults, scanId) {
         { re: /\[DETECTED_NATIVE_PINNING\]/i, sev: "critical", cat: "SSL Pinning — Native", title: "Native SSL Pinning Detected (BoringSSL/OpenSSL)", rec: "The app registers a custom verify callback at the native layer (C/C++). Java-layer bypasses will fail. Requires native function hooking.", owasp: "M3: Insecure Communication" },
         { re: /\[NATIVE_PINNING_CHECK\]/i, sev: "info", cat: "SSL Pinning — Native", title: "Native SSL Verification Executed", rec: "Observed the native SSL_get_verify_result function being called.", owasp: "M3: Insecure Communication" },
 
+        // ── Flutter BoringSSL (via kill_flutter) ─────────────────────────
+        { re: /\[SSL_HOOK_INSTALLED\].*Flutter.*BoringSSL/i, sev: "critical", cat: "SSL Pinning — Flutter BoringSSL", title: "Flutter BoringSSL SSL Hook Installed", rec: "The BoringSSL ssl_crypto_x509_session_verify_cert_chain function in libflutter.so has been hooked via offset analysis. Flutter's native SSL verification is now intercepted.", owasp: "M3: Insecure Communication" },
+        { re: /\[SSL_BYPASS_CONFIRMED\].*BoringSSL/i, sev: "critical", cat: "SSL Pinning — Flutter BoringSSL", title: "Flutter SSL Bypass Confirmed (BoringSSL)", rec: "BoringSSL certificate verification was actively bypassed at runtime. All HTTPS traffic from this Flutter app can be intercepted with a proxy.", owasp: "M3: Insecure Communication" },
+        { re: /libflutter\.so base:/i, sev: "info", cat: "SSL Pinning — Flutter BoringSSL", title: "Flutter Engine Module Located", rec: "libflutter.so was found and its base address resolved for offset-based hooking.", owasp: "M3: Insecure Communication" },
+
         // ── Legacy [+] SSL patterns (backward compat) ────────────────────
         { re: /\[\+\].*Bypass.*ssl|\[\+\].*ssl.*bypass|\[\+\].*certificate.*pinn|\[\+\].*pinn.*bypass/i, sev: "medium", cat: "SSL Pinning — Unverified", title: "SSL Bypass (Legacy Log — Unverified)", rec: "Detected from a legacy Frida script log format. Hook installation is indicated but runtime interception is not confirmed.", owasp: "M3: Insecure Communication" },
         { re: /\[\+\].*TrustManager|\[\+\].*checkServerTrusted|\[\+\].*SSLContext\.init/i, sev: "medium", cat: "SSL Pinning — Unverified", title: "TrustManager Hook (Legacy Log — Unverified)", rec: "Detected from a legacy Frida script log format. Interception is not confirmed.", owasp: "M3: Insecure Communication" },
@@ -1537,6 +1874,14 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
     }
     log("info", `Package: ${packageName}`);
 
+    // 3a. Detect Flutter app and device type
+    const flutterInfo = await detectFlutterApp(apkPath);
+    const deviceInfo = await detectDeviceType();
+    if (flutterInfo.isFlutter) {
+        log("ok", `🦋 Flutter app detected! ABIs in APK: ${flutterInfo.arches.join(", ")}`);
+        notify(`🦋 Flutter app detected (ABIs: ${flutterInfo.arches.join(", ")})`);
+    }
+
     // 3b. Try to patch APK with android-unpinner
     notify("🔧 Attempting to patch APK with android-unpinner (best-effort)...");
     let installApkPath = apkPath;
@@ -1613,6 +1958,12 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
         { name: "HTTPToolkit SSL Bypass", file: join(SCRIPTS_DIR, "HTTPTOOLKIT-UNPINNER.js") },
         { name: "SSL Obfuscated/Native Detection", file: join(SCRIPTS_DIR, "SSL-DETECT-OBFUSCATED.js") },
 
+        // ── Phase 2b: Flutter-specific SSL bypass (BoringSSL native layer) ──
+        // Standard Java-layer SSL hooks don't work on Flutter apps because Flutter
+        // uses BoringSSL compiled into libflutter.so. kill_flutter finds the exact
+        // hook offset via binary analysis and generates a native Frida script.
+        { name: "Flutter SSL Bypass (kill_flutter)", file: "__FLUTTER_DYNAMIC__", flutter: true },
+
         // ── Phase 3: Behavioral monitoring ──────────────────────────────
         // Passive observation of crypto, network, storage, auth, platform usage
         { name: "Crypto Monitor", file: join(SCRIPTS_DIR, "SHINOBI-CRYPTO.js") },
@@ -1653,6 +2004,74 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
     const scriptResults = [];
     let scriptsRun = 0;
     for (const script of scripts) {
+        // ── Flutter SSL Bypass Handler ───────────────────────────────────
+        if (script.flutter) {
+            if (!flutterInfo.isFlutter) {
+                log("info", `Skipping ${script.name} — not a Flutter app`);
+                scriptResults.push({ name: script.name, output: ["Not a Flutter app — skipped"], success: true });
+                continue;
+            }
+
+            notify(`🦋 Running: ${script.name}...`);
+            log("info", `[Flutter] Starting BoringSSL offset analysis for ${packageName}...`);
+            const output = [];
+            const proxyPort = parseInt(process.env.BURP_PROXY_PORT || "8080");
+
+            try {
+                // Determine the correct arch for the connected device
+                const targetArch = flutterInfo.arches.includes(deviceInfo.deviceArch)
+                    ? deviceInfo.deviceArch
+                    : flutterInfo.arches[0]; // fallback to first available
+
+                log("info", `[Flutter] Target arch: ${targetArch} (device: ${deviceInfo.deviceArch})`);
+
+                // Run kill_flutter to extract offset and generate Frida script
+                const kfResult = await runKillFlutter(
+                    apkPath, targetArch, outDir, packageName,
+                    deviceInfo.proxyIp, proxyPort
+                );
+
+                if (!kfResult.success) {
+                    log("warn", `[Flutter] kill_flutter failed: ${kfResult.error}`);
+                    output.push(`[!] kill_flutter failed: ${kfResult.error}`);
+                    scriptResults.push({ name: script.name, output, success: false, error: kfResult.error });
+                    scriptsRun++;
+                    continue;
+                }
+
+                output.push(`[+] BoringSSL offset: ${kfResult.offset}`);
+                output.push(`[+] Bypass script: ${kfResult.scriptPath}`);
+
+                // Set up iptables DNAT to redirect Flutter's direct connections to Burp
+                log("info", `[Flutter] Setting up iptables DNAT → ${deviceInfo.proxyIp}:${proxyPort}`);
+                await setupIptablesRedirect(deviceInfo.proxyIp, proxyPort);
+
+                // Run the generated Frida bypass script against the app
+                notify(`🦋 Running Flutter bypass Frida script (offset: ${kfResult.offset})...`);
+                const fridaResult = await runFridaScript(packageName, kfResult.scriptPath, script.name);
+                output.push(...fridaResult.output);
+
+                // Revert iptables rules
+                await revertIptablesRedirect(deviceInfo.proxyIp, proxyPort);
+
+                scriptResults.push({
+                    name: script.name,
+                    output,
+                    success: fridaResult.success,
+                    ...(fridaResult.error ? { error: fridaResult.error } : {}),
+                });
+            } catch (err) {
+                log("error", `[Flutter] ${script.name} failed: ${err.message}`);
+                output.push(`[!] Error: ${err.message}`);
+                // Make sure iptables is reverted even on error
+                try { await revertIptablesRedirect(deviceInfo.proxyIp, proxyPort); } catch { }
+                scriptResults.push({ name: script.name, output, success: false, error: err.message });
+            }
+            scriptsRun++;
+            continue;
+        }
+
+        // ── HTTPToolkit SSL Bypass Handler ───────────────────────────────
         if (script.name === "HTTPToolkit SSL Bypass") {
             notify(`🔬 Running: ${script.name} (via android-unpinner)...`);
             log("info", "Executing android-unpinner for SSL pinning bypass...");
@@ -1813,6 +2232,10 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
         sdkInfo,
         emulatorApiLevel: emulatorApi,
         unpinnerPatchSuccess: unpinnerSuccess,
+        flutterApp: flutterInfo.isFlutter,
+        flutterArches: flutterInfo.arches,
+        deviceType: deviceInfo.isEmulator ? "emulator" : "physical",
+        deviceArch: deviceInfo.deviceArch,
         sdkCompatibility: sdkCompat ? {
             compatible: sdkCompat.compatible,
             optimal: sdkCompat.optimal,
