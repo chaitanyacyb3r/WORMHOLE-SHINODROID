@@ -1,23 +1,28 @@
 {
-  "name": "wormhole-shinobidroid",
+  "name": "wormhole-Shinodroid",
   "version": "1.0.0",
-  "description": "WORMHOLE // ShinobiDroid 忍ドロイド — Automated Android pentesting pipeline (MobSF + Frida + BrutDroid)",
+  "description": "WORMHOLE // Shinodroid — Automated Android pentesting pipeline (MobSF + Frida + BrutDroid)",
   "type": "module",
   "private": true,
-  "main": "watcher.mjs",
+  "main": "src/daemon.mjs",
   "scripts": {
-    "start": "node watcher.mjs",
-    "watch": "node watcher.mjs"
+    "start": "node src/daemon.mjs",
+    "watch": "node src/daemon.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
   },
   "dependencies": {
+    "@auth/core": "^0.37.4",
+    "@convex-dev/auth": "^0.0.91",
     "@supabase/supabase-js": "^2.97.0",
     "chokidar": "^4.0.0",
-    "dotenv": "^16.4.0",
-    "node-telegram-bot-api": "^0.67.0",
+    "convex": "^1.32.0",
+    "dotenv": "^16.6.1",
     "pdfkit": "^0.17.2",
     "puppeteer-core": "^24.37.5"
+  },
+  "devDependencies": {
+    "puppeteer": "^24.40.0"
   }
 }

@@ -1,0 +1,221 @@
+name: "Shinodroid Security Scan"
+description: "Run automated mobile security analysis on your APK using Shinodroid"
+author: "Shinodroid Team"
+
+branding:
+  icon: "shield"
+  color: "red"
+
+inputs:
+  api-key:
+    description: "Shinodroid CI/CD API key (from your dashboard)"
+    required: true
+  apk-path:
+    description: "Path to the APK file to scan"
+    required: true
+  api-url:
+    description: "Shinodroid API base URL. Use your .convex.site URL (e.g. https://your-deployment.convex.site), NOT .convex.cloud"
+    required: true
+  fail-on:
+    description: "Comma-separated severity levels that should fail the build (e.g., 'critical,high')"
+    required: false
+    default: "critical,high,medium"
+  timeout:
+    description: "Maximum time to wait for scan completion (in seconds)"
+    required: false
+    default: "7200"
+  poll-interval:
+    description: "How often to check scan status (in seconds)"
+    required: false
+    default: "15"
+
+outputs:
+  scan-id:
+    description: "The Shinodroid scan ID"
+    value: ${{ steps.scan.outputs.scan-id }}
+  status:
+    description: "Final scan status (completed, failed, timeout)"
+    value: ${{ steps.scan.outputs.status }}
+  findings-critical:
+    description: "Number of critical findings"
+    value: ${{ steps.scan.outputs.findings-critical }}
+  findings-high:
+    description: "Number of high findings"
+    value: ${{ steps.scan.outputs.findings-high }}
+  findings-medium:
+    description: "Number of medium findings"
+    value: ${{ steps.scan.outputs.findings-medium }}
+  findings-low:
+    description: "Number of low findings"
+    value: ${{ steps.scan.outputs.findings-low }}
+  findings-info:
+    description: "Number of info findings"
+    value: ${{ steps.scan.outputs.findings-info }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run Shinodroid Security Scan
+      id: scan
+      shell: bash
+      env:
+        SHINODROID_API_KEY: ${{ inputs.api-key }}
+        SHINODROID_API_URL: ${{ inputs.api-url }}
+        APK_PATH: ${{ inputs.apk-path }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        TIMEOUT: ${{ inputs.timeout }}
+        POLL_INTERVAL: ${{ inputs.poll-interval }}
+      run: |
+        set -euo pipefail
+
+        echo "╔══════════════════════════════════════════════════════════╗"
+        echo "║  Shinodroid 忍ドロイド — CI/CD Security Scanner         ║"
+        echo "╚══════════════════════════════════════════════════════════╝"
+        echo ""
+
+        # ── Validate inputs ─────────────────────────────────────────
+        if [ ! -f "$APK_PATH" ]; then
+          echo "::error::APK file not found: $APK_PATH"
+          exit 1
+        fi
+
+        FILE_SIZE=$(stat -f%z "$APK_PATH" 2>/dev/null || stat --printf="%s" "$APK_PATH" 2>/dev/null)
+        FILE_NAME=$(basename "$APK_PATH")
+        echo "📦 APK: $FILE_NAME ($((FILE_SIZE / 1024 / 1024))MB)"
+        echo ""
+
+        # ── Step 1: Upload APK ──────────────────────────────────────
+        echo "⬆️  Getting upload URL..."
+        URL_RESPONSE=$(curl -s \
+          -X GET "${SHINODROID_API_URL}/api/v1/ci-upload-url" \
+          -H "Authorization: Bearer ${SHINODROID_API_KEY}")
+          
+        UPLOAD_URL=$(echo "$URL_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('uploadUrl', ''))" 2>/dev/null || \
+                     echo "$URL_RESPONSE" | grep -o '"uploadUrl":"[^"]*"' | cut -d'"' -f4)
+
+        if [ -z "$UPLOAD_URL" ]; then
+          echo "::error::Failed to get upload URL: $URL_RESPONSE"
+          exit 1
+        fi
+
+        echo "⬆️  Uploading APK to storage..."
+        STORAGE_RESPONSE=$(curl -s \
+          -X POST "$UPLOAD_URL" \
+          -H "Content-Type: application/octet-stream" \
+          --data-binary "@${APK_PATH}")
+          
+        STORAGE_ID=$(echo "$STORAGE_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('storageId', ''))" 2>/dev/null || \
+                     echo "$STORAGE_RESPONSE" | grep -o '"storageId":"[^"]*"' | cut -d'"' -f4)
+
+        if [ -z "$STORAGE_ID" ]; then
+          echo "::error::Failed to upload APK to storage: $STORAGE_RESPONSE"
+          exit 1
+        fi
+
+        echo "⬆️  Starting scan..."
+        SCAN_BODY=$(printf '{"storageId":"%s","fileName":"%s","fileSize":%d}' "$STORAGE_ID" "$FILE_NAME" "$FILE_SIZE")
+        
+        UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" \
+          -X POST "${SHINODROID_API_URL}/api/v1/ci-scan" \
+          -H "Authorization: Bearer ${SHINODROID_API_KEY}" \
+          -H "Content-Type: application/json" \
+          -d "$SCAN_BODY")
+
+        HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -1)
+        BODY=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+
+        if [ "$HTTP_CODE" != "201" ]; then
+          echo "::error::Scan start failed (HTTP $HTTP_CODE): $BODY"
+          exit 1
+        fi
+
+        SCAN_ID=$(echo "$BODY" | python3 -c "import sys, json; print(json.load(sys.stdin)['scanId'])" 2>/dev/null || \
+                  echo "$BODY" | grep -o '"scanId":"[^"]*"' | cut -d'"' -f4)
+
+        echo "✅ Scan queued: $SCAN_ID"
+        echo "scan-id=$SCAN_ID" >> "$GITHUB_OUTPUT"
+        echo ""
+
+        # ── Step 2: Poll for results ────────────────────────────────
+        echo "⏳ Waiting for scan to complete (timeout: ${TIMEOUT}s)..."
+        ELAPSED=0
+        STATUS="pending"
+
+        while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
+          sleep "$POLL_INTERVAL"
+          ELAPSED=$((ELAPSED + POLL_INTERVAL))
+
+          POLL_RESPONSE=$(curl -s \
+            -X GET "${SHINODROID_API_URL}/api/v1/ci-scan/${SCAN_ID}" \
+            -H "Authorization: Bearer ${SHINODROID_API_KEY}")
+
+          STATUS=$(echo "$POLL_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status', 'unknown'))" 2>/dev/null || echo "unknown")
+
+          echo "  [${ELAPSED}s] Status: $STATUS"
+
+          if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then
+            break
+          fi
+        done
+
+        # ── Step 3: Process results ─────────────────────────────────
+        if [ "$STATUS" = "completed" ]; then
+          CRITICAL=$(echo "$POLL_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('findingsCritical', 0))")
+          HIGH=$(echo "$POLL_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('findingsHigh', 0))")
+          MEDIUM=$(echo "$POLL_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('findingsMedium', 0))")
+          LOW=$(echo "$POLL_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('findingsLow', 0))")
+          INFO=$(echo "$POLL_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('findingsInfo', 0))")
+
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║  SCAN COMPLETE                                          ║"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║  Critical: $CRITICAL                                    ║"
+          echo "║  High:     $HIGH                                        ║"
+          echo "║  Medium:   $MEDIUM                                      ║"
+          echo "║  Low:      $LOW                                         ║"
+          echo "║  Info:     $INFO                                        ║"
+          echo "╚══════════════════════════════════════════════════════════╝"
+          echo ""
+
+          # Set outputs
+          echo "status=completed" >> "$GITHUB_OUTPUT"
+          echo "findings-critical=$CRITICAL" >> "$GITHUB_OUTPUT"
+          echo "findings-high=$HIGH" >> "$GITHUB_OUTPUT"
+          echo "findings-medium=$MEDIUM" >> "$GITHUB_OUTPUT"
+          echo "findings-low=$LOW" >> "$GITHUB_OUTPUT"
+          echo "findings-info=$INFO" >> "$GITHUB_OUTPUT"
+
+          # ── Step 4: Fail build if thresholds exceeded ─────────────
+          SHOULD_FAIL=false
+          IFS=',' read -ra LEVELS <<< "$FAIL_ON"
+          for LEVEL in "${LEVELS[@]}"; do
+            LEVEL=$(echo "$LEVEL" | xargs)  # trim whitespace
+            case "$LEVEL" in
+              critical) [ "$CRITICAL" -gt 0 ] && SHOULD_FAIL=true ;;
+              high)     [ "$HIGH" -gt 0 ] && SHOULD_FAIL=true ;;
+              medium)   [ "$MEDIUM" -gt 0 ] && SHOULD_FAIL=true ;;
+              low)      [ "$LOW" -gt 0 ] && SHOULD_FAIL=true ;;
+            esac
+          done
+
+          if [ "$SHOULD_FAIL" = true ]; then
+            echo "::error::Security scan failed! Found findings at severity levels: $FAIL_ON"
+            echo ""
+            echo "View full report in the Shinodroid dashboard."
+            exit 1
+          else
+            echo "✅ No blocking vulnerabilities found. Build passed."
+          fi
+
+        elif [ "$STATUS" = "failed" ]; then
+          ERROR=$(echo "$POLL_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('errorMessage', 'Unknown error'))")
+          echo "::error::Scan failed: $ERROR"
+          echo "status=failed" >> "$GITHUB_OUTPUT"
+          exit 1
+
+        else
+          echo "::error::Scan timed out after ${TIMEOUT}s (status: $STATUS)"
+          echo "status=timeout" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi

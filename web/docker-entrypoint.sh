@@ -1,6 +1,6 @@
 #!/bin/sh
 # ══════════════════════════════════════════════════════════════════════════
-# ShinobiDroid — Docker Entrypoint for Next.js
+# Shinodroid — Docker Entrypoint for Next.js
 #
 # Replaces build-time placeholder env vars with actual runtime values.
 # This is required because NEXT_PUBLIC_* vars are inlined into the

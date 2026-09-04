@@ -1,0 +1,143 @@
+import TelegramBot from "node-telegram-bot-api";
+import { extname, join } from "node:path";
+import { writeFile, stat } from "node:fs/promises";
+import { Config } from "../config/config.mjs";
+import { Logger } from "../utils/logger.mjs";
+import { ALLOWED_EXTENSIONS, safeFetch, escMd } from "../utils/helpers.mjs";
+import { MobSfService } from "../services/mobsf.service.mjs";
+import { AnalysisPipeline } from "../core/pipeline.mjs";
+
+export async function setupTelegramBot() {
+    if (!Config.TELEGRAM_TOKEN) {
+        Logger.warn("TELEGRAM_BOT_TOKEN not set — Telegram bot disabled");
+        return null;
+    }
+
+    const bot = new TelegramBot(Config.TELEGRAM_TOKEN, { polling: true });
+    const botInfo = await bot.getMe();
+    Logger.ok(`🤖 Telegram bot connected: @${botInfo.username}`);
+
+    bot.onText(/\/start/, (msg) => {
+        const chatId = msg.chat.id;
+        bot.sendMessage(chatId, [
+            `🛡️ *MobSF Security Scanner Bot*`,
+            ``,
+            `Send me an APK to scan it for security vulnerabilities\\.`,
+            ``,
+            `*Commands:*`,
+            `/status \\- Check MobSF connection`,
+            `/scans \\- List recent scans`,
+            `/help \\- Show this message`,
+            ``,
+            `Your Chat ID: \`${chatId}\``,
+        ].join("\n"), { parse_mode: "MarkdownV2" });
+    });
+
+    bot.onText(/\/help/, (msg) => {
+        bot.sendMessage(msg.chat.id, [
+            `📖 *How to use:*`,
+            ``,
+            `1\\. Send me an APK/IPA file as a document`,
+            `2\\. I'll upload it and start the Analysis Pipeline`,
+            `3\\. You'll get a security report`,
+            ``,
+            `Supported formats: \\.apk, \\.xapk, \\.ipa, \\.appx, \\.aab, \\.zip`,
+        ].join("\n"), { parse_mode: "MarkdownV2" });
+    });
+
+    bot.onText(/\/status/, async (msg) => {
+        const ok = await MobSfService.isAlive();
+        if (ok) bot.sendMessage(msg.chat.id, "✅ MobSF is running and API is connected!");
+        else bot.sendMessage(msg.chat.id, "❌ Cannot connect to MobSF. Is it running?");
+    });
+
+    bot.onText(/\/scans/, async (msg) => {
+        try {
+            const data = await MobSfService.fetchRecentScans(5);
+            const scans = data.content ?? data.results ?? [];
+            if (scans.length === 0) return bot.sendMessage(msg.chat.id, "📋 No scans found yet.");
+            
+            const lines = ["📋 *Recent Scans:*\n"];
+            for (const s of scans) {
+                const name = s.FILE_NAME ?? s.file_name ?? "unknown";
+                const hash = (s.MD5 ?? s.hash ?? "N/A").slice(0, 8);
+                lines.push("• " + escMd(name) + " (" + hash + "...)");
+            }
+            bot.sendMessage(msg.chat.id, lines.join("\n"), { parse_mode: "MarkdownV2" });
+        } catch {
+            bot.sendMessage(msg.chat.id, "❌ Error fetching scans");
+        }
+    });
+
+    // Handle document (APK/IPA) uploads
+    bot.on("document", async (msg) => {
+        const chatId = msg.chat.id;
+
+        if (Config.ALLOWED_CHAT_IDS.length > 0 && !Config.ALLOWED_CHAT_IDS.includes(String(chatId))) {
+            return bot.sendMessage(chatId, "🔒 You are not authorized to use this bot.");
+        }
+
+        const doc = msg.document;
+        const fileName = doc.file_name || "unknown.apk";
+        const ext = extname(fileName).toLowerCase();
+
+        if (!ALLOWED_EXTENSIONS.has(ext)) {
+            return bot.sendMessage(chatId, "❌ Unsupported file type...");
+        }
+
+        const fileSizeMB = (doc.file_size / (1024 * 1024)).toFixed(1);
+        Logger.info(`Telegram: ${msg.from?.username ?? "user"} sent ${fileName} (${fileSizeMB} MB)`);
+
+        const statusMsg = await bot.sendMessage(chatId, "📥 Received: " + fileName + "\n\n⏳ Downloading from Telegram...");
+
+        const updateStatus = async (text) => {
+            try { await bot.editMessageText(text, { chat_id: chatId, message_id: statusMsg.message_id }); } catch { }
+        };
+
+        try {
+            // Download from Telegram natively
+            const fileLink = await bot.getFileLink(doc.file_id);
+            const dlRes = await safeFetch(fileLink);
+            if (!dlRes.ok) return await updateStatus("❌ Failed to download file from Telegram servers.");
+            
+            const fileBuffer = Buffer.from(await dlRes.arrayBuffer());
+
+            // Save to inbox for record
+            const inboxPath = join(Config.APK_INBOX_DIR, `tg-${Date.now()}-${fileName}`);
+            await writeFile(inboxPath, fileBuffer);
+
+            // Trigger Pipeline!
+            const result = await AnalysisPipeline.run(fileBuffer, fileName, {
+                scanId: `tg-${Date.now()}`,
+                source: "telegram",
+                onProgress: async (msgText) => await updateStatus(msgText),
+            });
+
+            if (!result.success) {
+                return await updateStatus("❌ Scan failed: " + result.error);
+            }
+
+            // Report the outcome
+            const c = result.counts;
+            const summaryText = `*Scan Complete!*\n\n[🔴 High: ${c.high} | 🟠 Med: ${c.medium} | 🟡 Low: ${c.low} | 🟢 Info: ${c.info}]\n\nReports saved to: \`${escMd(result.outDir)}\``;
+            await bot.sendMessage(chatId, summaryText, { parse_mode: "MarkdownV2" });
+
+            // Attach PDF if we got one out of the pipeline
+            const pdfPath = join(result.outDir, "report.pdf");
+            try {
+                await stat(pdfPath);
+                await bot.sendDocument(chatId, pdfPath, { caption: "📄 Full Static PDF report" });
+            } catch { }
+
+            // Delete status message
+            try { await bot.deleteMessage(chatId, statusMsg.message_id); } catch { }
+            Logger.ok(`Telegram scan complete: ${fileName}`);
+
+        } catch (err) {
+            Logger.error(`Telegram scan error: ${err.message}`);
+            await updateStatus("❌ Error: " + err.message);
+        }
+    });
+
+    return bot;
+}

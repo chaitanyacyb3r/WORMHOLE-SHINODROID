@@ -1,0 +1,195 @@
+### Java
+
+Java.enumerateLoadedClasses(callbacks): enumerate classes loaded right now, where callbacks is an object specifying:
+
+```
+Java.enumerateLoadedClasses(callbacks)
+```
+
+
+```
+callbacks
+```
+
+- 
+        onMatch(name, handle): called for each loaded class with name that
+may be passed to [use()](https://frida.re/docs/javascript-api/#java-use) to get a JavaScript wrapper.
+You may also [Java.cast()](https://frida.re/docs/javascript-api/#java-cast) the handle to java.lang.Class.
+
+- 
+        onComplete(): called when all classes have been enumerated.
+
+onMatch(name, handle): called for each loaded class with name that may be passed to [use()](https://frida.re/docs/javascript-api/#java-use) to get a JavaScript wrapper. You may also [Java.cast()](https://frida.re/docs/javascript-api/#java-cast) the handle to java.lang.Class.
+
+```
+onMatch(name, handle)
+```
+
+
+```
+name
+```
+
+
+```
+use()
+```
+
+
+```
+Java.cast()
+```
+
+
+```
+handle
+```
+
+
+```
+java.lang.Class
+```
+
+onComplete(): called when all classes have been enumerated.
+
+```
+onComplete()
+```
+
+Java.enumerateLoadedClassesSync(): synchronous version of [enumerateLoadedClasses()](https://frida.re/docs/javascript-api/#java-enumerateloadedclasses) that returns the class names in an array.
+
+```
+Java.enumerateLoadedClassesSync()
+```
+
+
+```
+enumerateLoadedClasses()
+```
+
+Java.enumerateClassLoaders(callbacks): enumerate class loaders present in the Java VM, where callbacks is an object specifying:
+
+```
+Java.enumerateClassLoaders(callbacks)
+```
+
+
+```
+callbacks
+```
+
+- 
+        onMatch(loader): called for each class loader with loader, a wrapper
+for the specific java.lang.ClassLoader.
+
+- 
+        onComplete(): called when all class loaders have been enumerated.
+
+onMatch(loader): called for each class loader with loader, a wrapper for the specific java.lang.ClassLoader.
+
+```
+onMatch(loader)
+```
+
+
+```
+loader
+```
+
+
+```
+java.lang.ClassLoader
+```
+
+onComplete(): called when all class loaders have been enumerated.
+
+```
+onComplete()
+```
+
+You may pass such a loader to Java.ClassFactory.get() to be able to [.use()](https://frida.re/docs/javascript-api/#java-use) classes on the specified class loader.
+
+```
+Java.ClassFactory.get()
+```
+
+
+```
+.use()
+```
+
+Java.enumerateClassLoadersSync(): synchronous version of [enumerateClassLoaders()](https://frida.re/docs/javascript-api/#java-enumerateclassloaders) that returns the class loaders in an array.
+
+```
+Java.enumerateClassLoadersSync()
+```
+
+
+```
+enumerateClassLoaders()
+```
+
+Java.enumerateMethods(query): enumerate methods matching query, specified as "class!method", with globs permitted. May also be suffixed with / and one or more modifiers:
+
+```
+Java.enumerateMethods(query)
+```
+
+
+```
+query
+```
+
+
+```
+"class!method"
+```
+
+
+```
+/
+```
+
+- i: Case-insensitive matching.
+- s: Include method signatures, so e.g. "putInt" becomes
+"putInt(java.lang.String, int): void".
+- u: User-defined classes only, ignoring system classes.
+
+```
+i
+```
+
+
+```
+s
+```
+
+
+```
+"putInt"
+```
+
+
+```
+"putInt(java.lang.String, int): void"
+```
+
+
+```
+u
+```
+
+
+```
+Java.perform(() => { const groups = Java.enumerateMethods('*youtube*!on*') console.log(JSON.stringify(groups, null, 2)); });
+```
+
+
+```
+Java.perform(() => { const groups = Java.enumerateMethods('*youtube*!on*') console.log(JSON.stringify(groups, null, 2)); });
+```
+
+
+```
+[ { "loader": "<instance: java.lang.ClassLoader, $className: dalvik.system.PathClassLoader>", "classes": [ { "name": "com.google.android.apps.youtube.app.watch.nextgenwatch.ui.NextGenWatchLayout", "methods": [ "onAttachedToWindow", "onDetachedFromWindow", "onFinishInflate", "onInterceptTouchEvent", "onLayout", "onMeasure", "onSizeChanged", "onTouchEvent", "onViewRemoved" ] }, { "name": "com.google.android.apps.youtube.app.search.suggest.YouTubeSuggestionProvider", "methods": [ "onCreate" ] }, { "name": "com.google.android.libraries.youtube.common.ui.YouTubeButton", "methods": [ "onInitializeAccessibilityNodeInfo" ] }, … ] } ]
+```

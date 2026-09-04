@@ -1,5 +1,5 @@
 /**
- * ShinobiDroid -- AI Triage Engine (Phase 1)
+ * Shinodroid -- AI Triage Engine (Phase 1)
  *
  * Runs LAST in the pipeline (type: "ai"), after all static/dynamic engines
  * have produced their findings. Uses a local Ollama model to generate a
@@ -16,7 +16,7 @@
  *   7. Full markdown report saved to the scan output directory
  *
  * Connects to Ollama at http://127.0.0.1:11434 (default).
- * Model: minimax-m2.5:cloud (configurable via OLLAMA_MODEL env var).
+ * Model: minimax-m2.7:cloud (configurable via OLLAMA_MODEL env var).
  *
  * Graceful degradation: if Ollama is not running or the model is not
  * available, the engine returns skipped=true and the pipeline continues.
@@ -25,11 +25,12 @@
 import { createFinding } from "./_engine-interface.mjs";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { ComplianceMapper } from "../src/utils/compliance-map.mjs";
 
 // -- Configuration ------------------------------------------------------------
 
 const OLLAMA_BASE = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "minimax-m2.5:cloud";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "minimax-m2.7:cloud";
 const REQUEST_TIMEOUT_MS = 180_000; // 3 min per LLM call (detailed analysis needs time)
 const MAX_FINDINGS_PER_BATCH = 20;  // Process findings in batches of this size
 
@@ -87,7 +88,7 @@ async function ollamaChat(systemPrompt, userPrompt, log) {
 
 // -- System prompt ------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are ShinobiDroid AI, a principal-level Android application security analyst
+const SYSTEM_PROMPT = `You are Shinodroid AI, a principal-level Android application security analyst
 with 20+ years of experience in mobile penetration testing, OWASP MASVS auditing,
 and vulnerability research. You are writing a professional security assessment report
 that will be read by developers, security teams, and management.
@@ -147,17 +148,14 @@ pie title Findings by Analysis Engine
 ${Object.entries(engCounts).map(([eng, cnt]) => `    "${eng} (${cnt})" : ${cnt}`).join("\n")}
 \`\`\``;
 
-    // 3. Category breakdown (xychart)
+    // 3. Category breakdown (Pie Chart to prevent label overlapping)
     const topCats = Object.entries(catCounts)
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 8);
+        .slice(0, 6);
 
     const categoryChart = `\`\`\`mermaid
-xychart-beta
-    title "Findings by Category"
-    x-axis [${topCats.map(([cat]) => `"${cat.substring(0, 20)}"`).join(", ")}]
-    y-axis "Count" 0 --> ${Math.max(...topCats.map(([, c]) => c)) + 2}
-    bar [${topCats.map(([, c]) => c).join(", ")}]
+pie title Findings by Category
+${topCats.map(([cat, cnt]) => `    "${cat.substring(0, 30).replace(/"/g, "'")}${cat.length > 30 ? '...' : ''} (${cnt})" : ${cnt}`).join("\n")}
 \`\`\``;
 
     // 4. Scan pipeline flow diagram
@@ -265,6 +263,14 @@ Write in professional report language. Be specific to this application, not gene
 
 function buildDetailedAnalysisPrompt(findings, batchIndex) {
     const findingDescriptions = findings.map((f, i) => {
+        const complianceInfo = f.compliance?.masvs?.length
+            ? `Pre-Mapped MASVS: ${f.compliance.masvs.map(m => m.id).join(", ")}
+Mobile Top 10: ${f.compliance.mobile_top10 || "N/A"}
+GDPR: ${f.compliance.gdpr || "N/A"}
+DPDPA 2023: ${f.compliance.dpdpa || "N/A"}
+PCI-DSS: ${f.compliance.pci_dss || "N/A"}`
+            : "Compliance: Not yet mapped";
+
         return `--- FINDING ${batchIndex + i + 1} ---
 Title: ${f.title}
 Severity: ${f.severity}
@@ -272,7 +278,8 @@ Category: ${f.category}
 Engine: ${f.engine}
 Description: ${(f.description || "").substring(0, 500)}
 Current Recommendation: ${(f.recommendation || "").substring(0, 200)}
-OWASP Category: ${f.owasp_category || "Not mapped"}`;
+OWASP Category: ${f.owasp_category || "Not mapped"}
+${complianceInfo}`;
     }).join("\n\n");
 
     return `Perform a detailed security analysis of each finding below. For EACH finding, provide:
@@ -412,7 +419,7 @@ function buildReportHeader(appName, packageName, findings, engines) {
         sevCounts[f.severity] = (sevCounts[f.severity] || 0) + 1;
     }
 
-    return `# ShinobiDroid AI Security Analysis Report
+    return `# Shinodroid AI Security Analysis Report
 
 > **Application:** ${appName}
 > **Package:** ${packageName || "N/A"}
@@ -600,7 +607,7 @@ function markdownToHtml(markdownContent, appName) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ShinobiDroid AI Security Report - ${appName}</title>
+    <title>Shinodroid AI Security Report - ${appName}</title>
     <style>
         :root {
             --bg-primary: #0d1117;
@@ -706,12 +713,21 @@ function markdownToHtml(markdownContent, appName) {
         }
 
         .mermaid {
-            background: var(--bg-secondary);
+            background: #ffffff;
             border-radius: 12px;
             padding: 24px;
             margin: 20px 0;
             border: 1px solid var(--border);
             text-align: center;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+        }
+
+        /* Make SVG inside mermaid blocks fill the container nicely */
+        .mermaid svg {
+            max-width: 100% !important;
+            height: auto !important;
+            display: block;
+            margin: 0 auto;
         }
 
         hr {
@@ -764,23 +780,50 @@ function markdownToHtml(markdownContent, appName) {
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"><\\/script>
 
     <script>
-        // Initialize Mermaid with dark theme
+        // Initialize Mermaid — use 'base' theme with explicit vivid pie colors
         mermaid.initialize({
             startOnLoad: false,
-            theme: 'dark',
+            theme: 'base',
             themeVariables: {
-                primaryColor: '#58a6ff',
-                primaryTextColor: '#e6edf3',
-                primaryBorderColor: '#30363d',
-                lineColor: '#8b949e',
-                secondaryColor: '#21262d',
-                tertiaryColor: '#161b22',
-                fontSize: '14px',
+                // ── Pie chart slice colors — vivid and clearly distinct ──────
+                pie1:  '#ef4444',   // red
+                pie2:  '#f97316',   // orange
+                pie3:  '#eab308',   // yellow
+                pie4:  '#22c55e',   // green
+                pie5:  '#3b82f6',   // blue
+                pie6:  '#a855f7',   // purple
+                pie7:  '#ec4899',   // pink
+                pie8:  '#14b8a6',   // teal
+                pie9:  '#f43f5e',   // rose
+                pie10: '#84cc16',   // lime
+                pie11: '#06b6d4',   // cyan
+                pie12: '#8b5cf6',   // violet
+                // ── General theme ───────────────────────────────────────────
+                primaryColor:        '#e0e7ff',
+                primaryTextColor:    '#1e1b4b',
+                primaryBorderColor:  '#4f46e5',
+                lineColor:           '#6366f1',
+                secondaryColor:      '#f5f3ff',
+                tertiaryColor:       '#e0e7ff',
+                background:          '#ffffff',
+                mainBkg:             '#e0e7ff',
+                nodeBorder:          '#4f46e5',
+                edgeLabelBackground: '#f5f3ff',
+                titleColor:          '#1e1b4b',
+                fontSize:            '14px',
+                pieSectionTextColor: '#ffffff',
+                pieSectionTextSize:  '14px',
+                pieLegendTextColor:  '#1e1b4b',
+                pieLegendTextSize:   '13px',
             },
-            flowchart: { useMaxWidth: true, htmlLabels: true },
-            pie: { useMaxWidth: true },
-            gantt: { useMaxWidth: true },
+            flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' },
+            pie:        { useMaxWidth: true, textPosition: 0.75 },
+            gantt:      { useMaxWidth: true },
+            sequence:   { useMaxWidth: true, actorMargin: 50 },
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+            securityLevel: 'loose',
         });
+
 
         // Render markdown
         const md = \`${escapedMd}\`;
@@ -831,6 +874,7 @@ export default {
      * Check if Ollama is running and the model is available.
      */
     async isAvailable() {
+        if (process.env.SKIP_AI) return false;
         try {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 5000);
@@ -989,12 +1033,19 @@ export default {
             metadata.sectionsGenerated++;
             log("ok", "[AI] Remediation roadmap complete");
         }
+        // ---- Section 7: Compliance Mapping (programmatic) ----------------
+        log("info", "[AI] Generating compliance mapping (MASVS, GDPR, DPDPA, PCI-DSS)...");
+        context.onProgress?.("[AI] Building compliance mapping...");
+        const complianceSection = ComplianceMapper.buildComplianceMarkdown(sorted);
+        reportSections.push(complianceSection + "\n\n---\n\n");
+        metadata.sectionsGenerated++;
+        log("ok", "[AI] Compliance mapping complete");
 
-        // ---- Section 7: Footer ------------------------------------------
+        // ---- Section 8: Footer ------------------------------------------
         const elapsed = ((Date.now() - start) / 1000).toFixed(1);
         reportSections.push(
             `## Report Metadata\n\n` +
-            `- **Generated by:** ShinobiDroid AI Engine v1.0.0\n` +
+            `- **Generated by:** Shinodroid AI Engine v1.0.0\n` +
             `- **Model:** ${OLLAMA_MODEL}\n` +
             `- **Analysis time:** ${elapsed}s\n` +
             `- **Findings analyzed:** ${allFindings.length}\n` +

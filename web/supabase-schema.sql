@@ -1,5 +1,5 @@
 -- ============================================================
--- WORMHOLE // ShinobiDroid - Supabase Database Schema
+-- WORMHOLE // Shinodroid - Supabase Database Schema
 -- Run this in Supabase SQL Editor (Dashboard -> SQL Editor)
 -- ============================================================
 

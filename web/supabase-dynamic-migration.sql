@@ -1,5 +1,5 @@
 -- ============================================================
--- ShinobiDroid — Migration: Add Dynamic Analysis Columns
+-- Shinodroid — Migration: Add Dynamic Analysis Columns
 -- Run this in Supabase SQL Editor (Dashboard → SQL Editor)
 -- ============================================================
 

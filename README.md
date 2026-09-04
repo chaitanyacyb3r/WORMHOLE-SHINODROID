@@ -1,4 +1,4 @@
-# ShinobiDroid
+# Shinodroid
 
 > **Automated Android Security Analysis Platform**  
 > Static analysis · Dynamic instrumentation · AI-generated reports · Web dashboard
@@ -7,10 +7,9 @@
 
 ## What It Does
 
-ShinobiDroid is a full-stack Android pentesting pipeline. You upload an APK — it runs every analysis tool automatically and produces a professional, documented security report.
+Shinodroid is a full-stack Android pentesting pipeline. You upload an APK — it runs every analysis tool automatically and produces a professional, documented security report.
 
 ```
-Upload APK (web dashboard / Telegram / folder drop)
          │
          ▼
  ┌───────────────────────────────────────────────┐
@@ -51,8 +50,8 @@ Install these **before** cloning the project. All are free.
 ### Step 1 — Clone the Project
 
 ```powershell
-git clone https://github.com/YOUR_USERNAME/wormhole-shinobidroid.git
-cd wormhole-shinobidroid
+git clone https://github.com/YOUR_USERNAME/wormhole-Shinodroid.git
+cd wormhole-Shinodroid
 ```
 
 ### Step 2 — Install Dependencies
@@ -79,12 +78,13 @@ cd ..
 git clone https://github.com/MobSF/Mobile-Security-Framework-MobSF.git
 cd Mobile-Security-Framework-MobSF
 
-# Create a virtual python environment and activate it
+#Python Virtual Environment 
 python -m venv mobsf-venv
 mobsf-venv/Scripts/activate
 
+
 # Install Python deps
-tall -r requirements.txt
+./setup.bat
 
 # Run it (keep this terminal open)
 .\run.bat
@@ -119,6 +119,10 @@ MOBSF_API_KEY=paste_your_key_here
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+
+# Convex (real-time database & auth) — see Step 5 in SETUP_GUIDE.md
+# NEXT_PUBLIC_CONVEX_URL is auto-generated in web/.env.local by `npx convex dev`
+CONVEX_DEPLOY_KEY=your_convex_deploy_key_here
 
 # Ollama model (for AI reports)
 OLLAMA_MODEL=minimax-text-01:cloud
@@ -195,7 +199,7 @@ This worker polls Supabase for new APKs, runs all engines, uploads the results, 
 ## Project Structure
 
 ```
-wormhole-shinobidroid/
+wormhole-Shinodroid/
 │
 ├── web/                        # Next.js web dashboard (TypeScript)
 │   ├── src/app/dashboard/      # Dashboard pages (scan, reports, settings)
@@ -203,7 +207,7 @@ wormhole-shinobidroid/
 │   └── supabase-dynamic-migration.sql  # Run this in Supabase SQL Editor
 │
 ├── engines/                    # Analysis engine plugins
-│   ├── ai.engine.mjs           # AI report generation (MiniMax via Ollama)
+│   ├── ai.engine.mjs           # AI report generation (MiniMax via )
 │   ├── mobsf.engine.mjs        # MobSF static analysis
 │   ├── androwarn.engine.mjs    # Malicious behavior detection
 │   ├── firebase.engine.mjs     # Firebase misconfiguration scanner
@@ -220,12 +224,25 @@ wormhole-shinobidroid/
 │
 ├── orchestrator.mjs            # Engine runner — coordinates all engines
 ├── supabase-worker.mjs         # Scan worker — polls Supabase, runs engines
-├── watcher.mjs                 # Folder-drop + Telegram bot mode
 │
 ├── .env.example                # Copy to .env and fill in your values
 ├── setup-emulator.ps1          # One-time emulator + Frida setup
 └── harden-firewall.ps1         # Windows firewall rules for MobSF
 ```
+
+---
+
+## Dynamic Analysis Execution Phases
+
+When Shinodroid performs dynamic analysis, it executes its Frida scripts in a deliberate sequence to maximize success:
+
+1. **Phase 1: Anti-Tamper & Root Bypass**
+   - Runs `ROOTER.js` and `SHINOBI-RESILIENCE.js` first.
+   - Neutralizes root/tamper checks before the app can `System.exit()`.
+2. **Phase 2: SSL/TLS Pinning Bypass**
+   - After keeping the app alive in Phase 1, it runs `SSL-BYE.js`, `PintooR.js`, and uses `android-unpinner` to allow network interception.
+3. **Phase 3: Behavioral Monitoring**
+   - Finally, passive monitors (`SHINOBI-CRYPTO.js`, `SHINOBI-NETWORK.js`, `SHINOBI-STORAGE.js`, etc.) hook into Android APIs to log activity while the automated UI exerciser taps buttons.
 
 ---
 
@@ -237,13 +254,15 @@ wormhole-shinobidroid/
 | `MOBSF_URL` | Optional | MobSF URL (default: `http://127.0.0.1:8000`) |
 | `APK_INBOX_DIR` | Optional | Folder-watch inbox (default: `C:\MobSF-Scans\inbox`) |
 | `REPORTS_OUTPUT_DIR` | Optional | Report output folder (default: `C:\MobSF-Scans\reports`) |
+| `NEXT_PUBLIC_CONVEX_URL` | ✅ (web) | Convex deployment URL — auto-generated in `web/.env.local` by `npx convex dev` |
+| `CONVEX_DEPLOY_KEY` | ✅ (worker) | Convex deploy key for the scan worker (Dashboard → Settings → Deploy Keys) |
 | `NEXT_PUBLIC_SUPABASE_URL` | ✅ | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | Supabase anon (public) key |
 | `SUPABASE_SERVICE_ROLE_KEY` | ✅ | Supabase service role key (worker only) |
-| `OLLAMA_BASE_URL` | Optional | Ollama URL (default: `http://127.0.0.1:11434`) |
-| `OLLAMA_MODEL` | Optional | Model name (default: `minimax-text-01:cloud`) |
-| `TELEGRAM_BOT_TOKEN` | Optional | Telegram bot token (disables Telegram if blank) |
-| `TELEGRAM_ALLOWED_CHATS` | Optional | Comma-separated allowed chat IDs |
+| `OLLAMA_URL` | Optional | Ollama URL (default: `http://127.0.0.1:11434`) |
+| `OLLAMA_MODEL` | Optional | Model name (default: `minimax-m2.7:cloud`) |
+| `ZAP_API_KEY` | Optional | OWASP ZAP API key (default: `shinodroid-zap-key`) |
+| `SHINODROID_ADMIN_SECRET` | Optional | Admin secret for CI/CD API key generation |
 
 ---
 
@@ -287,8 +306,8 @@ node reporting\convert.js path\to\ai-security-analysis.md
 **Frida engine skipped**  
 → Normal if no emulator is running. Start the emulator from Android Studio first, then re-run the scan.
 
-**Ollama / AI engine skipped**  
-→ Run `ollama serve` and `ollama pull minimax-text-01:cloud` first.
+** / AI engine skipped**  
+→ Run ` serve` and ` pull minimax-text-01:cloud` first.
 
 ---
 
@@ -304,7 +323,7 @@ See the **"GitHub Setup"** section at the bottom of this README.
 
 1. Go to https://github.com and sign in
 2. Click **+** → **New repository**
-3. Name it: `wormhole-shinobidroid` (or anything you like)
+3. Name it: `wormhole-Shinodroid` (or anything you like)
 4. Set to **Private** (recommended — this has security tool code)
 5. **Do NOT** tick "Add README" or "Add .gitignore" (you already have them)
 6. Click **Create repository**
@@ -314,15 +333,15 @@ See the **"GitHub Setup"** section at the bottom of this README.
 GitHub will show you these commands — copy the HTTPS version:
 
 ```powershell
-cd C:\Users\elliot\Documents\OPENCLAW-SECURITY-INTEGRITY
+cd C:\path\to\OPENCLAW-SECURITY-INTEGRITY
 
 # If git isn't initialized yet:
 git init
 git add .
-git commit -m "Initial commit: ShinobiDroid Android pentesting platform"
+git commit -m "Initial commit: Shinodroid Android pentesting platform"
 
 # Link to your new GitHub repo:
-git remote add origin https://github.com/YOUR_USERNAME/wormhole-shinobidroid.git
+git remote add origin https://github.com/YOUR_USERNAME/wormhole-Shinodroid.git
 
 # Push:
 git branch -M main
@@ -334,8 +353,8 @@ git push -u origin main
 Your friend clones it and follows the Setup Guide above:
 
 ```powershell
-git clone https://github.com/YOUR_USERNAME/wormhole-shinobidroid.git
-cd wormhole-shinobidroid
+git clone https://github.com/YOUR_USERNAME/wormhole-Shinodroid.git
+cd wormhole-Shinodroid
 
 # Install all dependencies
 npm install
@@ -351,4 +370,4 @@ Copy-Item .env.example .env
 
 ---
 
-*ShinobiDroid — Built for Android Application Security Research*
+*Shinodroid — Built for Android Security Research*

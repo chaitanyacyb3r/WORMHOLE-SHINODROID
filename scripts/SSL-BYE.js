@@ -1,5 +1,5 @@
-// ========================================================
-// SSL-BYE.js – Universal SSL Pinning Bypass for Android
+﻿// ========================================================
+// SSL-BYE.js ΓÇô Universal SSL Pinning Bypass for Android
 // Modified & Brutified by: Brut Security
 // Website: https://brutsec.com
 // ========================================================
@@ -721,7 +721,7 @@ setTimeout(function() {
 		}
 		
 	console.log('========================================================================');
-	console.log('[#]They said ‘SSL Pinning is unbreakable.’ So I took that personally.[#]');
+	console.log('[#]They said ΓÇÿSSL Pinning is unbreakable.ΓÇÖ So I took that personally.[#]');
 	console.log('========================================================================');
 	});
 	

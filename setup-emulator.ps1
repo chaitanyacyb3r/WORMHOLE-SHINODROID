@@ -1,5 +1,5 @@
 # ================================================================
-# WORMHOLE // ShinobiDroid - Emulator Setup Script
+# WORMHOLE // Shinodroid - Emulator Setup Script
 # Automates: emulator launch, Frida server install, Frida start
 # ================================================================
 #
@@ -20,7 +20,7 @@ $ErrorActionPreference = "Continue"
 
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host "  WORMHOLE // ShinobiDroid - Automated Lab Setup" -ForegroundColor Cyan
+Write-Host "  WORMHOLE // Shinodroid - Automated Lab Setup" -ForegroundColor Cyan
 Write-Host "========================================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -83,7 +83,7 @@ if ($connected) {
     $selectedAvd = if ($avds -is [string]) { $avds } else { $avds[0] }
     Write-Host "  [--] Launching: $selectedAvd" -ForegroundColor Cyan
 
-    Start-Process -FilePath "emulator" -ArgumentList "-avd", $selectedAvd -WindowStyle Normal
+    Start-Process -FilePath "emulator" -ArgumentList "-avd", $selectedAvd, "-writable-system", "-wipe-data", "-no-audio", "-no-boot-anim" -WindowStyle Normal
 
     $timeout = 180
     $elapsed = 0
@@ -126,29 +126,41 @@ if ($fridaExists -match "frida-server" -and $fridaExists -notmatch "No such file
     # Detect architecture
     Write-Host "  [--] Detecting emulator architecture..." -ForegroundColor Yellow
     $arch = (cmd /c "adb shell getprop ro.product.cpu.abi 2>&1").Trim()
+    
+    if ($arch -match "more than one device") {
+        Write-Host "  [FAIL] Multiple Android Emulators detected!" -ForegroundColor Red
+        Write-Host "         Please close other emulators or run 'adb kill-server'." -ForegroundColor Gray
+        exit 1
+    }
+
     Write-Host "  [OK] Architecture: $arch" -ForegroundColor Green
 
     # Download matching frida-server
     $downloadUrl = "https://github.com/frida/frida/releases/download/$fridaVersion/frida-server-$fridaVersion-android-$arch.xz"
-    $xzFile = Join-Path $env:TEMP "frida-server-$fridaVersion.xz"
-    $serverFile = Join-Path $env:TEMP "frida-server"
+    $xzFile = Join-Path $env:TEMP "frida-server-$fridaVersion-$arch.xz"
+    $serverFile = Join-Path $env:TEMP "frida-server-$arch"
 
-    Write-Host "  [--] Downloading frida-server $fridaVersion for $arch..." -ForegroundColor Yellow
-    Write-Host "       URL: $downloadUrl" -ForegroundColor Gray
+    if (Test-Path $xzFile) {
+        Write-Host "  [OK] Using cached Frida server archive from: $xzFile" -ForegroundColor Yellow
+    } else {
+        Write-Host "  [--] Downloading frida-server $fridaVersion for $arch..." -ForegroundColor Yellow
+        Write-Host "       URL: $downloadUrl" -ForegroundColor Gray
 
-    try {
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $xzFile -UseBasicParsing
-        Write-Host "  [OK] Downloaded ($([math]::Round((Get-Item $xzFile).Length / 1MB, 1)) MB)" -ForegroundColor Green
-    } catch {
-        Write-Host "  [FAIL] Download failed: $_" -ForegroundColor Red
-        Write-Host "         Try manually: https://github.com/frida/frida/releases" -ForegroundColor Yellow
-        exit 1
+        try {
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $xzFile -UseBasicParsing
+            Write-Host "  [OK] Downloaded ($([math]::Round((Get-Item $xzFile).Length / 1MB, 1)) MB)" -ForegroundColor Green
+        } catch {
+            Write-Host "  [FAIL] Download failed: $_" -ForegroundColor Red
+            Write-Host "         Try manually: $downloadUrl" -ForegroundColor Gray
+            exit 1
+        }
     }
 
     # Extract .xz using Python (available since frida-tools requires Python)
-    Write-Host "  [--] Extracting..." -ForegroundColor Yellow
+    Write-Host "  [--] Extracting frida-server..." -ForegroundColor Yellow
     python -c "import lzma; open(r'$serverFile','wb').write(lzma.open(r'$xzFile').read())"
+
     if (-not (Test-Path $serverFile)) {
         Write-Host "  [FAIL] Extraction failed" -ForegroundColor Red
         exit 1
@@ -182,6 +194,100 @@ if ($fridaRunning -match "frida-server" -and $fridaRunning -notmatch "grep") {
     cmd /c 'adb shell "nohup /data/local/tmp/frida-server > /dev/null 2>&1 &"'
     Start-Sleep -Seconds 3
     Write-Host "  [OK] Frida server started" -ForegroundColor Green
+}
+
+# -- Step 4.5: Install ZAP CA Certificate --
+Write-Host ""
+Write-Host "[Step 4.5/5] Installing OWASP ZAP CA Certificate..." -ForegroundColor Yellow
+
+$zapCert = "$env:USERPROFILE\ZAP\.ZAP\config\ssl\zap_root_ca.cer"
+if (Test-Path $zapCert) {
+    Write-Host "  [--] Found ZAP certificate, pushing to device..." -ForegroundColor Gray
+    
+    # Do NOT pipe to Out-Null so we can see if adb push or adb root hangs
+    cmd /c "adb push `"$zapCert`" /sdcard/zap_ca.cer 2>&1"
+    
+    # For Android 7+ (API 24+), we must install it as a system cert
+    Write-Host "  [--] Installing as system certificate via tmpfs (API 24+)..." -ForegroundColor Gray
+    
+    try {
+        # Ensure root and WAIT for device to come back online
+        cmd /c "adb root 2>&1"
+        cmd /c "adb wait-for-device 2>&1"
+        Start-Sleep -Seconds 2
+        
+        # Calculate subject_hash_old natively in PowerShell
+        $certObj = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($zapCert)
+        $subjectBytes = $certObj.SubjectName.RawData
+        $md5 = [System.Security.Cryptography.MD5]::Create()
+        $hashBytes = $md5.ComputeHash($subjectBytes)
+        $hashInt = [BitConverter]::ToUInt32($hashBytes, 0)
+        $hash = '{0:x8}' -f $hashInt
+        
+        if ($hash -match "^[0-9a-f]{8}$") {
+            # Since Android 10 (API 29+), /system is strictly Read-Only.
+            # On Android 11 (API 30+), the Conscrypt APEX module manages the real trust store
+            # at /apex/com.android.conscrypt/cacerts/ -- the Settings UI reads from there.
+            # Strategy: tmpfs overlay on BOTH the legacy and APEX cert directories but ONLY using 
+            # nsenter into init's mount namespace so that ALL apps see the new mounts.
+            
+            # Step 1: Prep the cert dir 
+            $prepCmds = @(
+                "mkdir -p -m 700 /data/local/tmp/certs",
+                "cp /system/etc/security/cacerts/* /data/local/tmp/certs/",
+                "cp /sdcard/zap_ca.cer /data/local/tmp/certs/${hash}.0",
+                "chmod 644 /data/local/tmp/certs/${hash}.0"
+            )
+            foreach ($cmd in $prepCmds) {
+                cmd /c "adb shell `"$cmd`" 2>&1"
+            }
+
+            # Step 2: Overlay /system and /apex globally
+            $globalCmds = @(
+                "nsenter --mount=/proc/1/ns/mnt -- mount -t tmpfs tmpfs /system/etc/security/cacerts",
+                "nsenter --mount=/proc/1/ns/mnt -- sh -c 'cp /data/local/tmp/certs/* /system/etc/security/cacerts/'",
+                "nsenter --mount=/proc/1/ns/mnt -- sh -c 'chmod 644 /system/etc/security/cacerts/*'",
+                "nsenter --mount=/proc/1/ns/mnt -- sh -c 'chcon u:object_r:system_file:s0 /system/etc/security/cacerts/*'",
+                
+                "nsenter --mount=/proc/1/ns/mnt -- mount -t tmpfs tmpfs /apex/com.android.conscrypt/cacerts",
+                "nsenter --mount=/proc/1/ns/mnt -- sh -c 'cp /data/local/tmp/certs/* /apex/com.android.conscrypt/cacerts/'",
+                "nsenter --mount=/proc/1/ns/mnt -- sh -c 'chmod 644 /apex/com.android.conscrypt/cacerts/*'",
+                "nsenter --mount=/proc/1/ns/mnt -- sh -c 'chcon u:object_r:system_file:s0 /apex/com.android.conscrypt/cacerts/*'"
+            )
+            foreach ($cmd in $globalCmds) {
+                cmd /c "adb shell `"$cmd`" 2>&1"
+            }
+            
+            # Cleanup temp dir
+            cmd /c "adb shell rm -rf /data/local/tmp/certs 2>&1"
+
+
+            
+            # Verify installation in APEX path (the real trust store)
+            $check = cmd /c "adb shell ls /apex/com.android.conscrypt/cacerts/${hash}.0 2>&1"
+            if ($check -match "${hash}.0") {
+                Write-Host "  [OK] ZAP certificate installed in system + APEX trust store (${hash}.0)" -ForegroundColor Green
+            } else {
+                # Fallback check on legacy path
+                $legacyCheck = cmd /c "adb shell ls /system/etc/security/cacerts/${hash}.0 2>&1"
+                if ($legacyCheck -match "${hash}.0") {
+                    Write-Host "  [OK] ZAP certificate installed in legacy trust store (${hash}.0)" -ForegroundColor Green
+                    Write-Host "       Note: APEX mount failed -- cert may not appear in Settings UI on Android 11+" -ForegroundColor Yellow
+                } else {
+                    Write-Host "  [FAIL] Certificate installation failed." -ForegroundColor Red
+                }
+            }
+        } else {
+            Write-Host "  [WARN] Failed to compute certificate hash locally." -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "  [WARN] Failed to install ZAP system cert. Interception may fail." -ForegroundColor Yellow
+        Write-Host "         Error: $_" -ForegroundColor Gray
+    }
+} else {
+    Write-Host "  [WARN] ZAP certificate not found at: $zapCert" -ForegroundColor Yellow
+    Write-Host "         Network interception will not work." -ForegroundColor Gray
+    Write-Host "         Open ZAP -> Options -> Dynamic SSL Certificates -> Generate -> Save" -ForegroundColor Gray
 }
 
 # -- Step 5: Verify everything --

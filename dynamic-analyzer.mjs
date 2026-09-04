@@ -1,5 +1,5 @@
 /**
- * ShinobiDroid 忍ドロイド — Dynamic Analyzer Module (Frida + ADB)
+ * Shinodroid — Dynamic Analyzer Module (Frida + ADB)
  *
  * Pipeline:
  *   1. Check for connected emulator (auto-launch if missing)
@@ -14,9 +14,10 @@
 
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile, readFile, access } from "node:fs/promises";
-import { join, dirname, resolve } from "node:path";
+import { writeFile, readFile, readdir, access, rm, mkdir } from "node:fs/promises";
+import { join, dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 
 const execFileAsync = promisify(execFile);
 
@@ -27,13 +28,43 @@ const __dirname = dirname(__filename);
 const SCRIPTS_DIR = join(__dirname, "scripts");
 
 // How long to let each Frida script run before collecting output (ms)
-const FRIDA_SCRIPT_TIMEOUT = parseInt(process.env.FRIDA_TIMEOUT_MS || "45000");
+const FRIDA_SCRIPT_TIMEOUT = parseInt(process.env.FRIDA_TIMEOUT_MS || "60000");
 
 // Path to setup-emulator.ps1 (auto-launches emulator + Frida server)
 const SETUP_EMULATOR_SCRIPT = join(__dirname, "setup-emulator.ps1");
 
 // ADB command
 const ADB = "adb";
+
+// android-unpinner command
+const UNPINNER = "android-unpinner";
+
+// kill_flutter tool path (Flutter SSL pinning bypass via BoringSSL offset analysis)
+const KILL_FLUTTER_SCRIPT = join(__dirname, "tools", "kill_flutter", "kill_flutter.py");
+const PYTHON = process.platform === "win32" ? "python" : "python3";
+
+// Android SDK build-tools (for zipalign)
+const BUILD_TOOLS = join(
+    process.env.ANDROID_HOME || join(process.env.LOCALAPPDATA || "", "Android", "Sdk"),
+    "build-tools"
+);
+
+// Debug keystore for re-signing patched APKs
+const DEBUG_KEYSTORE = join(process.env.USERPROFILE || "", ".gemini", "debug.keystore");
+
+// apktool.jar path (call via java -jar to avoid the .bat's "pause" blocking automation)
+const APKTOOL_JAR = "C:\\Windows\\apktool.jar";
+
+// Target device serial — set by checkEmulator(), used by adb() to add -s flag
+let targetSerial = process.env.ANDROID_SERIAL || null;
+
+/**
+ * Build ADB args with -s <serial> when a specific device is targeted.
+ * Prevents "more than one device/emulator" errors.
+ */
+function adb(...args) {
+    return targetSerial ? ["-s", targetSerial, ...args] : [...args];
+}
 
 // ── Logging ─────────────────────────────────────────────────────────────────
 
@@ -55,6 +86,7 @@ export async function checkEmulator() {
         for (const line of lines) {
             const parts = line.trim().split(/\s+/);
             if (parts.length >= 2 && parts[1] === "device") {
+                targetSerial = parts[0];
                 return { connected: true, device: parts[0] };
             }
         }
@@ -113,24 +145,58 @@ async function launchEmulator(onProgress) {
  */
 async function installApk(apkPath) {
     try {
-        const { stdout, stderr } = await execFileAsync(ADB, ["install", "-r", "-t", apkPath], {
+        const { stdout, stderr } = await execFileAsync(ADB, adb("install", "-r", "-t", apkPath), {
             timeout: 120_000,
         });
         if (stdout.includes("Success") || stdout.includes("success")) {
             return { success: true };
         }
-        return { success: false, error: (stderr || stdout).slice(0, 300) };
+        const output = (stderr || stdout);
+        // Signature mismatch — uninstall the old version and retry
+        if (output.includes("INSTALL_FAILED_UPDATE_INCOMPATIBLE")) {
+            log("warn", "Signature mismatch — uninstalling old version and retrying...");
+            // Extract package name from the error message or use aapt
+            const pkgMatch = output.match(/Package\s+([\w.]+)\s/);
+            if (pkgMatch) {
+                try { await execFileAsync(ADB, adb("uninstall", pkgMatch[1]), { timeout: 30_000 }); } catch { }
+            }
+            const retry = await execFileAsync(ADB, adb("install", "-t", apkPath), { timeout: 120_000 });
+            if (retry.stdout.includes("Success") || retry.stdout.includes("success")) {
+                return { success: true };
+            }
+            return { success: false, error: (retry.stderr || retry.stdout).slice(0, 300) };
+        }
+        return { success: false, error: output.slice(0, 300) };
     } catch (err) {
-        return { success: false, error: err.message.slice(0, 300) };
+        const msg = err.message || "";
+        // Also handle the mismatch when it comes as an exception
+        if (msg.includes("INSTALL_FAILED_UPDATE_INCOMPATIBLE")) {
+            log("warn", "Signature mismatch (exception) — uninstalling old version and retrying...");
+            const pkgMatch = msg.match(/Package\s+([\w.]+)\s/);
+            if (pkgMatch) {
+                try { await execFileAsync(ADB, adb("uninstall", pkgMatch[1]), { timeout: 30_000 }); } catch { }
+            }
+            try {
+                const retry = await execFileAsync(ADB, adb("install", "-t", apkPath), { timeout: 120_000 });
+                if (retry.stdout.includes("Success") || retry.stdout.includes("success")) {
+                    return { success: true };
+                }
+                return { success: false, error: (retry.stderr || retry.stdout).slice(0, 300) };
+            } catch (retryErr) {
+                return { success: false, error: retryErr.message.slice(0, 300) };
+            }
+        }
+        return { success: false, error: msg.slice(0, 300) };
     }
 }
+
 
 /**
  * Uninstall a package from the emulator.
  */
 async function uninstallApk(packageName) {
     try {
-        await execFileAsync(ADB, ["uninstall", packageName], { timeout: 30_000 });
+        await execFileAsync(ADB, adb("uninstall", packageName), { timeout: 30_000 });
     } catch {
         // Ignore — best effort cleanup
     }
@@ -153,6 +219,327 @@ async function getPackageName(mobsfReport, apkPath) {
     return null;
 }
 
+// ── SDK-Aware Emulator Selection ────────────────────────────────────────────
+
+/**
+ * Extract SDK version metadata from the APK.
+ *
+ * Resolution order:
+ *   1. MobSF report JSON (fastest — already parsed during static phase)
+ *   2. aapt2/aapt on PATH
+ *   3. aapt2 from Android SDK build-tools directory (Windows/Linux)
+ *
+ * @param {object|null} mobsfReport
+ * @param {string} apkPath
+ * @returns {{ minSdk: number|null, targetSdk: number|null, maxSdk: number|null }}
+ */
+async function extractSdkInfo(mobsfReport, apkPath) {
+    const info = { minSdk: null, targetSdk: null, maxSdk: null };
+
+    // ── Source 1: MobSF report ──────────────────────────────────────────
+    if (mobsfReport) {
+        const min = mobsfReport.min_sdk ?? mobsfReport.minsdk ?? mobsfReport.min_sdk_version;
+        const target = mobsfReport.target_sdk ?? mobsfReport.targetsdk ?? mobsfReport.target_sdk_version;
+        const max = mobsfReport.max_sdk ?? mobsfReport.maxsdk ?? mobsfReport.max_sdk_version;
+        if (min != null) info.minSdk = parseInt(String(min), 10) || null;
+        if (target != null) info.targetSdk = parseInt(String(target), 10) || null;
+        if (max != null) info.maxSdk = parseInt(String(max), 10) || null;
+
+        if (info.minSdk || info.targetSdk) {
+            log("ok", `SDK from MobSF — min=${info.minSdk} target=${info.targetSdk} max=${info.maxSdk}`);
+            return info;
+        }
+    }
+
+    // ── Source 2: aapt2 / aapt on PATH ──────────────────────────────────
+    for (const tool of ["aapt2", "aapt"]) {
+        try {
+            const { stdout } = await execFileAsync(tool, ["dump", "badging", apkPath], { timeout: 30_000 });
+            const minMatch = stdout.match(/sdkVersion:'(\d+)'/);
+            const targetMatch = stdout.match(/targetSdkVersion:'(\d+)'/);
+            const maxMatch = stdout.match(/maxSdkVersion:'(\d+)'/);
+            if (minMatch) info.minSdk = parseInt(minMatch[1], 10);
+            if (targetMatch) info.targetSdk = parseInt(targetMatch[1], 10);
+            if (maxMatch) info.maxSdk = parseInt(maxMatch[1], 10);
+
+            if (info.minSdk || info.targetSdk) {
+                log("ok", `SDK from ${tool} — min=${info.minSdk} target=${info.targetSdk} max=${info.maxSdk}`);
+                return info;
+            }
+        } catch { /* tool not on PATH — try next */ }
+    }
+
+    // ── Source 3: Android SDK build-tools directory ─────────────────────
+    const sdkRoot = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT
+        || (process.platform === "win32"
+            ? join(process.env.LOCALAPPDATA || "", "Android", "Sdk")
+            : "");
+    if (sdkRoot) {
+        try {
+            const btDir = join(sdkRoot, "build-tools");
+            const versions = (await readdir(btDir)).sort().reverse(); // newest first
+            for (const ver of versions) {
+                const aapt2Path = join(btDir, ver,
+                    process.platform === "win32" ? "aapt2.exe" : "aapt2");
+                try {
+                    await access(aapt2Path);
+                    const { stdout } = await execFileAsync(aapt2Path,
+                        ["dump", "badging", apkPath], { timeout: 30_000 });
+                    const minMatch = stdout.match(/sdkVersion:'(\d+)'/);
+                    const targetMatch = stdout.match(/targetSdkVersion:'(\d+)'/);
+                    if (minMatch) info.minSdk = parseInt(minMatch[1], 10);
+                    if (targetMatch) info.targetSdk = parseInt(targetMatch[1], 10);
+                    if (info.minSdk || info.targetSdk) {
+                        log("ok", `SDK from ${aapt2Path} — min=${info.minSdk} target=${info.targetSdk}`);
+                        return info;
+                    }
+                } catch { /* this version's aapt2 didn't work — try next */ }
+            }
+        } catch { /* build-tools dir not found */ }
+    }
+
+    log("warn", "Could not extract SDK versions from APK — will use any available emulator");
+    return info;
+}
+
+/**
+ * Query the API level of the currently connected emulator via ADB.
+ * @returns {number|null}
+ */
+async function getEmulatorApiLevel() {
+    try {
+        const { stdout } = await execFileAsync(ADB,
+            adb("shell", "getprop", "ro.build.version.sdk"), { timeout: 10_000 });
+        const level = parseInt(stdout.trim(), 10);
+        return isNaN(level) ? null : level;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * List locally installed AVDs with their API levels.
+ *
+ * Reads each AVD's config.ini to extract the `target=android-XX` field.
+ * Only works on the host machine (not inside Docker).
+ *
+ * @returns {Array<{ name: string, apiLevel: number }>}
+ */
+async function listLocalAvds() {
+    const avds = [];
+
+    let avdNames;
+    try {
+        const { stdout } = await execFileAsync("emulator", ["-list-avds"], { timeout: 10_000 });
+        avdNames = stdout.trim().split("\n").map(s => s.trim()).filter(Boolean);
+    } catch {
+        log("info", "emulator CLI not available — cannot list AVDs (expected inside Docker)");
+        return avds;
+    }
+
+    if (avdNames.length === 0) return avds;
+
+    const avdRoot = join(
+        process.env.USERPROFILE || process.env.HOME || "",
+        ".android", "avd"
+    );
+
+    for (const name of avdNames) {
+        const configPath = join(avdRoot, `${name}.avd`, "config.ini");
+        try {
+            const content = await readFile(configPath, "utf-8");
+            // Match: target=android-31  OR  image.sysdir.1=system-images/android-31/...
+            const targetMatch = content.match(/^target=android-(\d+)/m);
+            const imageDirMatch = content.match(/image\.sysdir\.1=.*android-(\d+)/m);
+            const apiLevel = parseInt((targetMatch || imageDirMatch)?.[1], 10);
+
+            if (!isNaN(apiLevel)) {
+                avds.push({ name, apiLevel });
+                log("info", `  AVD: ${name} → API ${apiLevel}`);
+            } else {
+                log("warn", `  AVD: ${name} → API unknown (no target= in config)`);
+            }
+        } catch {
+            log("warn", `  AVD: ${name} → config.ini unreadable`);
+        }
+    }
+
+    return avds;
+}
+
+/**
+ * Select the best AVD for a given APK's SDK requirements.
+ *
+ * Selection priority (highest to lowest):
+ *   1. Exact match on targetSdkVersion
+ *   2. Closest AVD with apiLevel >= targetSdkVersion (prefer lowest above)
+ *   3. Closest AVD with apiLevel >= minSdkVersion   (prefer highest below target)
+ *   4. Any AVD (absolute last resort)
+ *
+ * @param {Array<{name: string, apiLevel: number}>} avds
+ * @param {{ minSdk: number|null, targetSdk: number|null }} sdkInfo
+ * @returns {{ avd: {name: string, apiLevel: number}|null, matchQuality: string }}
+ */
+function selectBestAvd(avds, sdkInfo) {
+    if (avds.length === 0) return { avd: null, matchQuality: "none" };
+    if (!sdkInfo.targetSdk && !sdkInfo.minSdk) {
+        return { avd: avds[0], matchQuality: "unknown_sdk" };
+    }
+
+    const target = sdkInfo.targetSdk || sdkInfo.minSdk;
+    const min = sdkInfo.minSdk || target;
+
+    // 1. Exact target match
+    const exact = avds.find(a => a.apiLevel === target);
+    if (exact) return { avd: exact, matchQuality: "exact" };
+
+    // 2. Closest >= target (prefer lowest above target)
+    const aboveTarget = avds
+        .filter(a => a.apiLevel >= target)
+        .sort((a, b) => a.apiLevel - b.apiLevel);
+    if (aboveTarget.length > 0) return { avd: aboveTarget[0], matchQuality: "above_target" };
+
+    // 3. Closest >= min (prefer highest, i.e. closest to target)
+    const aboveMin = avds
+        .filter(a => a.apiLevel >= min)
+        .sort((a, b) => b.apiLevel - a.apiLevel);
+    if (aboveMin.length > 0) return { avd: aboveMin[0], matchQuality: "above_min" };
+
+    // 4. Last resort — highest available
+    const sorted = [...avds].sort((a, b) => b.apiLevel - a.apiLevel);
+    return { avd: sorted[0], matchQuality: "fallback" };
+}
+
+/**
+ * Validate SDK compatibility between the APK and the running emulator.
+ *
+ * @param {{ minSdk: number|null, targetSdk: number|null, maxSdk: number|null }} sdkInfo
+ * @param {number|null} emulatorApi
+ * @returns {{ compatible: boolean, optimal: boolean, warnings: string[] }}
+ */
+function validateSdkCompatibility(sdkInfo, emulatorApi) {
+    const result = { compatible: true, optimal: true, warnings: [] };
+
+    if (!emulatorApi) {
+        result.warnings.push("Could not determine emulator API level");
+        result.optimal = false;
+        return result;
+    }
+
+    if (!sdkInfo.minSdk && !sdkInfo.targetSdk) {
+        result.warnings.push("SDK versions unknown — compatibility not verified");
+        result.optimal = false;
+        return result;
+    }
+
+    // Hard incompatibility: emulator API < minSdk
+    if (sdkInfo.minSdk && emulatorApi < sdkInfo.minSdk) {
+        result.compatible = false;
+        result.optimal = false;
+        result.warnings.push(
+            `INCOMPATIBLE: Emulator API ${emulatorApi} < APK minSdkVersion ${sdkInfo.minSdk}. ` +
+            `The APK will refuse to install. Create an AVD with API ${sdkInfo.minSdk}+ in Android Studio.`
+        );
+        return result;
+    }
+
+    // Hard incompatibility: emulator API > maxSdk (rare but possible)
+    if (sdkInfo.maxSdk && emulatorApi > sdkInfo.maxSdk) {
+        result.compatible = false;
+        result.optimal = false;
+        result.warnings.push(
+            `INCOMPATIBLE: Emulator API ${emulatorApi} > APK maxSdkVersion ${sdkInfo.maxSdk}. ` +
+            `Create an AVD with API ${sdkInfo.maxSdk} or lower.`
+        );
+        return result;
+    }
+
+    // Suboptimal: emulator API != targetSdk
+    if (sdkInfo.targetSdk && emulatorApi !== sdkInfo.targetSdk) {
+        result.optimal = false;
+        const diff = Math.abs(emulatorApi - sdkInfo.targetSdk);
+        if (diff <= 2) {
+            result.warnings.push(
+                `Emulator API ${emulatorApi} is close to target SDK ${sdkInfo.targetSdk} (±${diff}) — results will be reliable.`
+            );
+        } else {
+            result.warnings.push(
+                `Emulator API ${emulatorApi} differs from target SDK ${sdkInfo.targetSdk} by ${diff} levels. ` +
+                `For best accuracy, create an API ${sdkInfo.targetSdk} AVD in Android Studio.`
+            );
+        }
+    }
+
+    return result;
+}
+
+/**
+ * Launch a specific AVD by name using the `emulator` CLI.
+ *
+ * In Docker environments (detected via ADB_SERVER_SOCKET), logs
+ * a recommendation and returns false — the host must start it manually.
+ *
+ * @param {string} avdName   Exact AVD name from `emulator -list-avds`
+ * @param {function} onProgress
+ * @returns {boolean}
+ */
+async function launchSpecificAvd(avdName, onProgress) {
+    const notify = onProgress || (() => { });
+
+    // Docker containers cannot launch host emulators
+    if (process.env.ADB_SERVER_SOCKET) {
+        log("info", `Docker detected — please start AVD "${avdName}" on your host machine`);
+        notify(`⚠️ Start AVD "${avdName}" on your host and run: adb -a nodaemon server start`);
+        return false;
+    }
+
+    notify(`🚀 Launching AVD: ${avdName}...`);
+    log("info", `Launching emulator: ${avdName}`);
+
+    try {
+        const proc = spawn("emulator", [
+            "-avd", avdName,
+            "-no-audio",
+            "-no-boot-anim",
+            "-gpu", "auto",
+        ], {
+            detached: true,
+            stdio: "ignore",
+            ...(process.platform === "win32" ? { windowsHide: true } : {}),
+        });
+        proc.unref();
+    } catch (err) {
+        log("error", `Failed to launch emulator: ${err.message}`);
+        return false;
+    }
+
+    // Wait for boot (up to 2 minutes, checking every 5s)
+    for (let attempt = 0; attempt < 24; attempt++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const emu = await checkEmulator();
+        if (emu.connected) {
+            try {
+                const { stdout } = await execFileAsync(ADB,
+                    adb("shell", "getprop", "sys.boot_completed"), { timeout: 10_000 });
+                if (stdout.trim() === "1") {
+                    log("ok", `Emulator fully booted after ${(attempt + 1) * 5}s: ${emu.device}`);
+                    return true;
+                }
+            } catch { /* boot_completed not ready yet */ }
+            // After 35s accept a connected device even if boot isn't flagged done
+            if (attempt >= 6) {
+                log("ok", `Emulator connected after ${(attempt + 1) * 5}s: ${emu.device}`);
+                await new Promise(r => setTimeout(r, 3000));
+                return true;
+            }
+        }
+        notify(`⏳ Waiting for ${avdName}... (${(attempt + 1) * 5}s)`);
+    }
+
+    log("error", `${avdName} did not come online within 2 minutes`);
+    return false;
+}
+
 // ── Frida Helpers ───────────────────────────────────────────────────────────
 
 /**
@@ -164,22 +551,22 @@ async function getPackageName(mobsfReport, apkPath) {
  */
 async function ensureFridaServer() {
     // Attempt to restart adb as root (works on most AVDs where su does not)
-    try { await execFileAsync(ADB, ["root"], { timeout: 10_000 }); } catch { /* ignore */ }
+    try { await execFileAsync(ADB, adb("root"), { timeout: 10_000 }); } catch { /* ignore */ }
 
     // Kill any existing (possibly stale) frida-server
     try {
-        await execFileAsync(ADB, [
-            "shell", "pkill -f frida-server"
-        ], { timeout: 5000 });
+        await execFileAsync(ADB, adb(
+            "shell", "pkill -f frida-server"),
+            { timeout: 5000 });
         await new Promise(r => setTimeout(r, 1000));
     } catch { /* nothing to kill — that's fine */ }
 
     // Start fresh frida-server as a daemon
     log("info", "Starting fresh Frida server on emulator...");
     try {
-        await execFileAsync(ADB, [
-            "shell", "nohup /data/local/tmp/frida-server -D > /dev/null 2>&1 &"
-        ], { timeout: 10_000 });
+        await execFileAsync(ADB, adb(
+            "shell", "nohup /data/local/tmp/frida-server -D > /dev/null 2>&1 &"),
+            { timeout: 10_000 });
     } catch (err) {
         log("error", "Failed to start Frida server: " + err.message);
         return false;
@@ -203,6 +590,343 @@ async function ensureFridaServer() {
 
     log("error", "Frida server started but frida-ps cannot enumerate processes");
     return false;
+}
+
+// ── Flutter Detection ───────────────────────────────────────────────────────
+
+/**
+ * Detect whether an APK is a Flutter app by checking for libflutter.so inside.
+ *
+ * Uses `aapt list` or `unzip -l` to enumerate entries without extracting.
+ * @param {string} apkPath
+ * @returns {Promise<{ isFlutter: boolean, arches: string[] }>}
+ */
+async function detectFlutterApp(apkPath) {
+    const result = { isFlutter: false, arches: [] };
+
+    // Try aapt list first (faster, no extraction)
+    for (const tool of ["aapt", "aapt2"]) {
+        try {
+            const { stdout } = await execFileAsync(tool, ["list", apkPath], {
+                timeout: 30_000,
+                maxBuffer: 10 * 1024 * 1024,
+            });
+            const lines = stdout.split("\n");
+            for (const line of lines) {
+                const match = line.match(/lib\/([^/]+)\/libflutter\.so/);
+                if (match) {
+                    result.isFlutter = true;
+                    if (!result.arches.includes(match[1])) result.arches.push(match[1]);
+                }
+            }
+            if (result.isFlutter) return result;
+        } catch { /* tool not available, try next */ }
+    }
+
+    // Fallback: read APK binary and search for libflutter.so ZIP entries
+    // APK is a ZIP file — entry paths appear as plain ASCII in the central directory.
+    // Reading the file as latin1 preserves all bytes and lets us regex-match paths.
+    try {
+        const buf = await readFile(apkPath);
+        const str = buf.toString("latin1");
+        const re = /lib\/([^\/\x00]+)\/libflutter\.so/g;
+        let m;
+        while ((m = re.exec(str)) !== null) {
+            result.isFlutter = true;
+            if (!result.arches.includes(m[1])) result.arches.push(m[1]);
+        }
+    } catch (err) {
+        log("warn", `Flutter detection fallback failed: ${err.message}`);
+    }
+
+    return result;
+}
+
+// ── Device Type Detection ───────────────────────────────────────────────────
+
+/**
+ * Detect whether the connected ADB device is an emulator or a physical device.
+ * Returns the device type and the appropriate Burp proxy IP.
+ *
+ * Emulators: ro.hardware contains "goldfish", "ranchu", or "sdk", or
+ *            ro.product.model contains "sdk" or "Emulator".
+ * Physical:  everything else.
+ *
+ * @returns {Promise<{ isEmulator: boolean, proxyIp: string, deviceArch: string }>}
+ */
+async function detectDeviceType() {
+    const result = { isEmulator: false, proxyIp: "127.0.0.1", deviceArch: "arm64-v8a" };
+
+    try {
+        const { stdout: hw } = await execFileAsync(ADB, adb("shell", "getprop", "ro.hardware"), { timeout: 5000 });
+        const { stdout: model } = await execFileAsync(ADB, adb("shell", "getprop", "ro.product.model"), { timeout: 5000 });
+        const { stdout: abi } = await execFileAsync(ADB, adb("shell", "getprop", "ro.product.cpu.abi"), { timeout: 5000 });
+
+        const hwVal = hw.trim().toLowerCase();
+        const modelVal = model.trim().toLowerCase();
+        const abiVal = abi.trim().toLowerCase();
+
+        // Map device ABI to Flutter's lib/ directory naming
+        if (abiVal.includes("arm64") || abiVal.includes("aarch64")) {
+            result.deviceArch = "arm64-v8a";
+        } else if (abiVal.includes("x86_64")) {
+            result.deviceArch = "x86_64";
+        } else if (abiVal.includes("armeabi") || abiVal.includes("arm")) {
+            result.deviceArch = "armeabi-v7a";
+        } else if (abiVal.includes("x86")) {
+            result.deviceArch = "x86";
+        }
+
+        // Emulator detection heuristics
+        const emulatorPatterns = ["goldfish", "ranchu", "sdk", "emulator", "generic"];
+        result.isEmulator = emulatorPatterns.some(p => hwVal.includes(p) || modelVal.includes(p));
+
+        if (result.isEmulator) {
+            // Inside an emulator, 10.0.2.2 is the host machine's loopback
+            result.proxyIp = process.env.BURP_PROXY_IP || "10.0.2.2";
+        } else {
+            // Physical device: need the host machine's LAN IP
+            // Try to auto-detect from the ADB connection's host IP
+            result.proxyIp = process.env.BURP_PROXY_IP || await getHostLanIp();
+        }
+
+        log("info", `Device type: ${result.isEmulator ? "EMULATOR" : "PHYSICAL"}, ` +
+            `ABI: ${result.deviceArch}, Proxy IP: ${result.proxyIp}`);
+    } catch (err) {
+        log("warn", `Device type detection failed: ${err.message}`);
+    }
+
+    return result;
+}
+
+/**
+ * Auto-detect host machine's LAN IP for Burp proxy redirection on physical devices.
+ * Tries multiple methods across Windows / macOS / Linux.
+ * @returns {Promise<string>}
+ */
+async function getHostLanIp() {
+    // Method 1: Use Node's os.networkInterfaces()
+    const { networkInterfaces } = await import("node:os");
+    const interfaces = networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            // Skip loopback, internal, and IPv6
+            if (iface.internal || iface.family !== "IPv4") continue;
+            // Prefer common LAN ranges
+            if (iface.address.startsWith("192.168.") ||
+                iface.address.startsWith("10.") ||
+                iface.address.startsWith("172.")) {
+                return iface.address;
+            }
+        }
+    }
+
+    log("warn", "Could not auto-detect host LAN IP — defaulting to 192.168.1.1. " +
+        "Set BURP_PROXY_IP env variable to override.");
+    return "192.168.1.1";
+}
+
+// ── kill_flutter Integration ────────────────────────────────────────────────
+
+/**
+ * Run kill_flutter.py against an APK to extract the BoringSSL hook offset
+ * and generate a Frida bypass script.
+ *
+ * @param {string} apkPath     - Path to the APK
+ * @param {string} arch        - Target ABI (arm64-v8a, x86_64, armeabi-v7a)
+ * @param {string} outDir      - Directory to write generated files
+ * @param {string} packageName - App package name (piped to stdin if aapt fails)
+ * @param {string} proxyIp     - Burp proxy IP for iptables commands
+ * @param {number} proxyPort   - Burp proxy port
+ * @returns {Promise<{ success: boolean, scriptPath?: string, offset?: string, error?: string }>}
+ */
+async function runKillFlutter(apkPath, arch, outDir, packageName, proxyIp = "10.0.2.2", proxyPort = 8080) {
+    try {
+        await access(KILL_FLUTTER_SCRIPT);
+    } catch {
+        return { success: false, error: "kill_flutter.py not found at: " + KILL_FLUTTER_SCRIPT };
+    }
+
+    const kfOutDir = join(outDir, "kill_flutter");
+    try { await mkdir(kfOutDir, { recursive: true }); } catch { /* exists */ }
+
+    log("info", `[kill_flutter] Running against ${basename(apkPath)} (arch: ${arch})...`);
+
+    // Find aapt/aapt2 from Android SDK build-tools and add to PATH
+    let envPath = process.env.PATH || "";
+    const sdkRoot = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT
+        || (process.platform === "win32"
+            ? join(process.env.LOCALAPPDATA || "", "Android", "Sdk")
+            : "");
+    if (sdkRoot) {
+        try {
+            const btDir = join(sdkRoot, "build-tools");
+            const versions = (await readdir(btDir)).sort().reverse();
+            for (const ver of versions) {
+                const btPath = join(btDir, ver);
+                envPath = btPath + (process.platform === "win32" ? ";" : ":") + envPath;
+                break; // Use newest version
+            }
+            log("info", `[kill_flutter] Added build-tools to PATH for aapt`);
+        } catch { /* no build-tools found */ }
+    }
+
+    // Use spawn instead of execFileAsync so we can pipe packageName to stdin
+    // (kill_flutter prompts for manual input when aapt is not on PATH)
+    return new Promise((resolve) => {
+        const output = [];
+        const proc = spawn(PYTHON, [
+            KILL_FLUTTER_SCRIPT,
+            apkPath,
+            "--arch", arch,
+            "-i", proxyIp,
+            "-p", String(proxyPort),
+            "-o", kfOutDir,
+        ], {
+            stdio: ["pipe", "pipe", "pipe"],
+            env: { ...process.env, PYTHONIOENCODING: "utf-8", PATH: envPath },
+            timeout: 120_000,
+        });
+
+        proc.stdout.on("data", (data) => {
+            const text = data.toString();
+            output.push(text);
+            // If kill_flutter asks for package name, pipe it
+            if (text.includes("Enter package name") || text.includes("package name manually")) {
+                log("info", `[kill_flutter] Piping package name: ${packageName}`);
+                try { proc.stdin.write(packageName + "\n"); } catch { /* ignore */ }
+            }
+        });
+
+        proc.stderr.on("data", (data) => {
+            output.push(data.toString());
+        });
+
+        const timer = setTimeout(() => {
+            try { proc.kill("SIGTERM"); } catch { }
+            resolve({ success: false, error: "kill_flutter timed out after 120s" });
+        }, 120_000);
+
+        proc.on("close", async (code) => {
+            clearTimeout(timer);
+            const allOutput = output.join("");
+            log("info", `[kill_flutter] Output (exit ${code}):\n${allOutput.substring(0, 1500)}`);
+
+            // Parse the offset from output
+            const offsetMatch = allOutput.match(/SSL verify offset.*?:\s*(0x[0-9a-fA-F]+)/);
+            const offset = offsetMatch ? offsetMatch[1] : null;
+
+            // Find the generated Frida script
+            const bypassScriptPath = join(kfOutDir, "flutter_bypass.js");
+            try {
+                await access(bypassScriptPath);
+                log("ok", `[kill_flutter] Frida bypass script generated: ${bypassScriptPath}`);
+                log("ok", `[kill_flutter] Hook offset: ${offset || "unknown"}`);
+                resolve({ success: true, scriptPath: bypassScriptPath, offset, output: allOutput });
+            } catch {
+                // kill_flutter didn't produce the expected file — generate one manually from the offset
+                if (offset) {
+                    const manualScript = generateFlutterBypassScript(offset);
+                    await writeFile(bypassScriptPath, manualScript, "utf-8");
+                    log("ok", `[kill_flutter] Generated manual bypass script from offset ${offset}`);
+                    resolve({ success: true, scriptPath: bypassScriptPath, offset, output: allOutput });
+                } else {
+                    log("error", `[kill_flutter] No offset found. Full output:\n${allOutput}`);
+                    resolve({ success: false, error: "kill_flutter ran but no bypass script or offset was produced", output: allOutput });
+                }
+            }
+        });
+
+        proc.on("error", (err) => {
+            clearTimeout(timer);
+            log("error", `[kill_flutter] Process error: ${err.message}`);
+            resolve({ success: false, error: err.message });
+        });
+    });
+}
+
+/**
+ * Generate a Frida script that hooks BoringSSL's SSL verify function at a known offset.
+ * @param {string} offset - Hex offset (e.g., "0x73ee8c")
+ * @returns {string}
+ */
+function generateFlutterBypassScript(offset) {
+    return `/**
+ * Flutter SSL Pinning Bypass — generated by Shinodroid + kill_flutter
+ * Hooks ssl_crypto_x509_session_verify_cert_chain in libflutter.so
+ * Offset: ${offset}
+ */
+'use strict';
+
+function bypass() {
+    var moduleName = "libflutter.so";
+    var m = Process.findModuleByName(moduleName);
+    if (!m) {
+        console.log("[!] Module " + moduleName + " not found — retrying in 1s...");
+        setTimeout(bypass, 1000);
+        return;
+    }
+
+    var offset = ${offset};
+    var addr = m.base.add(offset);
+    console.log("[+] libflutter.so base: " + m.base);
+    console.log("[+] Hooking ssl_verify at: " + addr + " (offset " + offset.toString(16) + ")");
+    console.log("[SSL_HOOK_INSTALLED] Flutter BoringSSL ssl_crypto_x509_session_verify_cert_chain");
+
+    Interceptor.attach(addr, {
+        onLeave: function (retval) {
+            retval.replace(0x1);
+            console.log("[SSL_BYPASS_CONFIRMED] BoringSSL cert verification bypassed — returned SUCCESS");
+        }
+    });
+
+    console.log("[+] Flutter SSL bypass ACTIVE — all certificates will be trusted");
+}
+
+setTimeout(bypass, 500);
+`;
+}
+
+// ── iptables Helpers (for Flutter traffic redirection) ──────────────────────
+
+/**
+ * Set up iptables DNAT rules on the device to redirect all TCP 443/80 traffic
+ * to the Burp proxy. Required for Flutter apps that ignore system proxy settings.
+ *
+ * @param {string} proxyIp
+ * @param {number} proxyPort
+ */
+async function setupIptablesRedirect(proxyIp, proxyPort) {
+    const rules = [
+        `iptables -t nat -A OUTPUT -p tcp --dport 443 -j DNAT --to-destination ${proxyIp}:${proxyPort}`,
+        `iptables -t nat -A OUTPUT -p tcp --dport 80  -j DNAT --to-destination ${proxyIp}:${proxyPort}`,
+    ];
+
+    for (const rule of rules) {
+        try {
+            await execFileAsync(ADB, adb("shell", "su", "-c", rule), { timeout: 10_000 });
+        } catch (err) {
+            log("warn", `iptables setup failed: ${err.message}`);
+        }
+    }
+    log("ok", `[iptables] DNAT rules set: TCP 80/443 → ${proxyIp}:${proxyPort}`);
+}
+
+/**
+ * Revert iptables DNAT rules set by setupIptablesRedirect().
+ */
+async function revertIptablesRedirect(proxyIp, proxyPort) {
+    const rules = [
+        `iptables -t nat -D OUTPUT -p tcp --dport 443 -j DNAT --to-destination ${proxyIp}:${proxyPort}`,
+        `iptables -t nat -D OUTPUT -p tcp --dport 80  -j DNAT --to-destination ${proxyIp}:${proxyPort}`,
+    ];
+
+    for (const rule of rules) {
+        try {
+            await execFileAsync(ADB, adb("shell", "su", "-c", rule), { timeout: 10_000 });
+        } catch { /* rule might not exist — that's fine */ }
+    }
+    log("info", `[iptables] DNAT rules reverted`);
 }
 
 /**
@@ -271,6 +995,7 @@ function runFridaScript(packageName, scriptPath, scriptName) {
                     "-U",
                     "-f", packageName,
                     "-l", scriptPath,
+                    "--no-pause",
                 ], {
                     stdio: ["pipe", "pipe", "pipe"],
                     timeout: FRIDA_SCRIPT_TIMEOUT + 5000,
@@ -292,20 +1017,11 @@ function runFridaScript(packageName, scriptPath, scriptName) {
                     }
                 });
 
-                // After 1.5s (script loaded, hooks installed), resume the app
-                // by writing %resume to Frida's REPL stdin
-                const resumeDelay = setTimeout(() => {
-                    if (!spawnFailed && proc.stdin?.writable) {
-                        try {
-                            proc.stdin.write("%resume\n");
-                        } catch { /* ignore write errors on dead proc */ }
-                    }
-                }, 1500);
-
-                // After 6s (app resumed + running), exercise with monkey
+                // --no-pause resumes the app automatically after script load.
+                // After 4s (app resumed + running), exercise with monkey
                 const monkeyDelay = setTimeout(() => {
                     if (!spawnFailed) exerciseApp(packageName).catch(() => { });
-                }, 6000);
+                }, 4000);
 
                 const timer = setTimeout(() => {
                     timedOut = true;
@@ -315,7 +1031,6 @@ function runFridaScript(packageName, scriptPath, scriptName) {
                 proc.on("close", (code) => {
                     clearTimeout(timer);
                     clearTimeout(monkeyDelay);
-                    clearTimeout(resumeDelay);
                     resolveSpawn({
                         success: !spawnFailed && (timedOut || code === 0),
                         spawnFailed,
@@ -340,19 +1055,19 @@ function runFridaScript(packageName, scriptPath, scriptName) {
 
             // Step 1: Launch the app
             try {
-                await execFileAsync(ADB, [
+                await execFileAsync(ADB, adb(
                     "shell", "monkey",
                     "-p", packageName,
                     "-c", "android.intent.category.LAUNCHER",
                     "1"
-                ], { timeout: 10_000 });
+                ), { timeout: 10_000 });
             } catch {
                 // monkey failed — try am start with a common activity pattern
                 try {
-                    await execFileAsync(ADB, [
+                    await execFileAsync(ADB, adb(
                         "shell", "am", "start",
-                        "-n", `${packageName}/.MainActivity`,
-                    ], { timeout: 10_000 });
+                        "-n", `${packageName}/.MainActivity`
+                    ), { timeout: 10_000 });
                 } catch (e) {
                     log("warn", `  Could not launch app: ${e.message}`);
                 }
@@ -363,9 +1078,9 @@ function runFridaScript(packageName, scriptPath, scriptName) {
 
             let fridaArgs;
             try {
-                const { stdout: pidOut } = await execFileAsync(ADB, [
+                const { stdout: pidOut } = await execFileAsync(ADB, adb(
                     "shell", "pidof", packageName
-                ], { timeout: 5000 });
+                ), { timeout: 5000 });
                 const pid = pidOut.trim().split(/\s+/)[0]; // Take first PID if multiple
                 if (pid && /^\d+$/.test(pid)) {
                     fridaArgs = ["-U", "-p", pid, "-l", scriptPath];
@@ -458,67 +1173,314 @@ function runFridaScript(packageName, scriptPath, scriptName) {
  * and produces false negatives.
  *
  * Instead, we send controlled tap and swipe events at coordinates strictly
- * within the app's content area (y: 200–1700), avoiding the status bar
- * (top ~100px) and navigation bar (bottom ~100px).
+ * within the app's content area (y: 250–1650), avoiding the status bar
+ * (top ~150px) and navigation bar (bottom ~150px).
+ *
+ * IMPORTANT: We do NOT send KEYCODE_BACK events — they can push the root
+ * activity off-screen and background the app, causing Frida hooks to stop
+ * receiving data. A foreground watchdog checks before each batch and
+ * re-launches the app if it has been backgrounded.
  */
+
+
 async function exerciseApp(packageName) {
     try {
-        log("info", `Exercising ${packageName} with safe targeted inputs...`);
-
-        // Safe content area boundaries (works for 1080x1920 and 1080x2400)
-        const minX = 50, maxX = 1030;
-        const minY = 200, maxY = 1700; // well below status bar, above nav bar
+        log("info", `Exercising ${packageName} with targeted UI interactions...`);
 
         const randInt = (lo, hi) => Math.floor(Math.random() * (hi - lo + 1)) + lo;
 
+        // ── Detect screen resolution dynamically ────────────────────────
+        let screenW = 1080, screenH = 1920; // safe defaults
+        try {
+            const { stdout: wmOut } = await execFileAsync(ADB, adb(
+                "shell", "wm", "size"
+            ), { timeout: 5_000 });
+            const sizeMatch = wmOut.match(/(\d+)x(\d+)/);
+            if (sizeMatch) {
+                screenW = parseInt(sizeMatch[1]);
+                screenH = parseInt(sizeMatch[2]);
+            }
+        } catch { /* use defaults */ }
+        log("info", `  Screen resolution: ${screenW}x${screenH}`);
+
+        // Compute safe tap bounds (avoid status bar, nav bar, edges)
+        const safeBounds = {
+            minX: Math.floor(screenW * 0.02),   // 2% from left
+            maxX: Math.floor(screenW * 0.98),   // 2% from right
+            minY: Math.floor(screenH * 0.05),   // 5% from top (status bar)
+            maxY: Math.floor(screenH * 0.90),   // 10% from bottom (nav bar)
+        };
+
+        // ── Phase 1: Targeted taps on every clickable UI element ────────
+        // Uses UIAutomator to dump the screen hierarchy and find all
+        // clickable/focusable elements (buttons, switches, checkboxes, etc.)
+        // This GUARANTEES that every visible button gets pressed at least once.
+        let targetedTaps = 0;
+        const MAX_SCREENS = 3; // Dump → tap → re-dump up to 3 times to catch new screens
+        let lastUiXml = "";
+        const tappedCoords = new Set();
+
+        for (let screen = 0; screen < MAX_SCREENS; screen++) {
+            await ensureAppForeground(packageName);
+
+            // Dump UI hierarchy to XML
+            let uiXml = "";
+            try {
+                await execFileAsync(ADB, adb(
+                    "shell", "uiautomator", "dump", "/data/local/tmp/ui.xml"
+                ), { timeout: 10_000 });
+                const { stdout } = await execFileAsync(ADB, adb(
+                    "shell", "cat", "/data/local/tmp/ui.xml"
+                ), { timeout: 10_000 });
+                uiXml = stdout;
+            } catch (e) {
+                log("warn", `UIAutomator dump failed on pass ${screen + 1}: ${e.message?.substring(0, 60)}`);
+                break;
+            }
+
+            if (!uiXml || uiXml.length < 50) break;
+            
+            // If the screen hasn't changed at all since the last pass, we're done!
+            if (uiXml === lastUiXml) {
+                log("info", `  Screen pass ${screen + 1}: UI has not changed, stopping targeted taps`);
+                break;
+            }
+            lastUiXml = uiXml;
+
+            // Parse all clickable elements with bounds
+            // Format: bounds="[x1,y1][x2,y2]" clickable="true"
+            const clickableRegex = /clickable="true"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"|bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*clickable="true"/g;
+            const elements = [];
+            let match;
+
+            while ((match = clickableRegex.exec(uiXml)) !== null) {
+                const x1 = parseInt(match[1] || match[5]);
+                const y1 = parseInt(match[2] || match[6]);
+                const x2 = parseInt(match[3] || match[7]);
+                const y2 = parseInt(match[4] || match[8]);
+                const cx = Math.floor((x1 + x2) / 2);
+                const cy = Math.floor((y1 + y2) / 2);
+                
+                const coordKey = `${cx},${cy}`;
+                
+                // Skip elements in status bar or navigation bar, and elements we already tapped
+                if (cy > safeBounds.minY && cy < safeBounds.maxY && cx > safeBounds.minX && cx < safeBounds.maxX && !tappedCoords.has(coordKey)) {
+                    elements.push({ cx, cy, coordKey });
+                }
+            }
+
+            if (elements.length === 0) {
+                log("info", `  Screen pass ${screen + 1}: no NEW clickable elements found`);
+                break;
+            }
+
+            log("info", `  Screen pass ${screen + 1}: found ${elements.length} new clickable elements — tapping each one`);
+
+            // Tap each clickable element deliberately
+            for (const el of elements) {
+                try {
+                    await execFileAsync(ADB, adb(
+                        "shell", `su -c 'input tap ${el.cx} ${el.cy}' 2>/dev/null || input tap ${el.cx} ${el.cy}`
+                    ), { timeout: 5_000 });
+                    tappedCoords.add(el.coordKey);
+                    targetedTaps++;
+                    // Brief pause to let the app process the tap
+                    await new Promise(r => setTimeout(r, 500));
+                } catch (tapErr) {
+                    log("warn", `  Tap failed at (${el.cx},${el.cy}): ${tapErr.message?.substring(0, 80)}`);
+                }
+            }
+
+            // Wait for any network calls / UI transitions triggered by the taps
+            await new Promise(r => setTimeout(r, 2000));
+        }
+
+        log("ok", `Phase 1 complete — ${targetedTaps} targeted taps on real UI elements`);
+
+        // ── Phase 2: Random taps as secondary coverage ──────────────────
+        // Catches elements that might not appear as "clickable" in the
+        // UIAutomator dump (e.g. custom views, Compose click handlers)
+        const minX = safeBounds.minX + 60, maxX = safeBounds.maxX - 60;
+        const minY = safeBounds.minY + 100, maxY = safeBounds.maxY - 100;
         const actions = [];
 
-        // Generate 30 taps at random safe positions
-        for (let i = 0; i < 30; i++) {
-            actions.push(`input tap ${randInt(minX, maxX)} ${randInt(minY, maxY)}`);
+        for (let i = 0; i < 15; i++) {
+            actions.push(`su -c 'input tap ${randInt(minX, maxX)} ${randInt(minY, maxY)}' 2>/dev/null || input tap ${randInt(minX, maxX)} ${randInt(minY, maxY)}`);
         }
 
-        // Interleave 8 swipes (scroll up/down within app)
-        for (let i = 0; i < 8; i++) {
-            const x = randInt(200, 800);
-            const y1 = randInt(400, 900);
-            const y2 = randInt(1000, 1500);
-            // Alternate scroll direction
-            actions.push(i % 2 === 0
-                ? `input swipe ${x} ${y1} ${x} ${y2} 300`   // scroll up
-                : `input swipe ${x} ${y2} ${x} ${y1} 300`); // scroll down
-        }
-
-        // Add 4 Back presses to navigate between screens
+        // A few swipes to scroll and reveal hidden content
         for (let i = 0; i < 4; i++) {
-            actions.push("input keyevent KEYCODE_BACK");
+            const x = randInt(Math.floor(screenW * 0.2), Math.floor(screenW * 0.8));
+            const y1 = randInt(Math.floor(screenH * 0.2), Math.floor(screenH * 0.4));
+            const y2 = randInt(Math.floor(screenH * 0.5), Math.floor(screenH * 0.7));
+            actions.push(i % 2 === 0
+                ? `su -c 'input swipe ${x} ${y1} ${x} ${y2} 300' 2>/dev/null || input swipe ${x} ${y1} ${x} ${y2} 300`
+                : `su -c 'input swipe ${x} ${y2} ${x} ${y1} 300' 2>/dev/null || input swipe ${x} ${y2} ${x} ${y1} 300`);
         }
 
-        // Shuffle actions for more natural interaction
+        // Shuffle for natural interaction
         for (let i = actions.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [actions[i], actions[j]] = [actions[j], actions[i]];
         }
 
-        // Execute in batches (chain with && and sleep between batches)
+        // Execute in batches with foreground watchdog
         const batchSize = 6;
         for (let i = 0; i < actions.length; i += batchSize) {
+            await ensureAppForeground(packageName);
             const batch = actions.slice(i, i + batchSize);
             const cmd = batch.join(" && sleep 0.15 && ");
             try {
-                await execFileAsync(ADB, ["shell", cmd], {
-                    timeout: 15_000,
-                });
+                await execFileAsync(ADB, adb("shell", cmd), { timeout: 15_000 });
             } catch { /* individual batch failure is fine */ }
         }
 
-        log("ok", `App exercised — ${actions.length} safe input events sent`);
+        log("ok", `App exercised — ${targetedTaps} targeted + ${actions.length} random = ${targetedTaps + actions.length} total events`);
     } catch (err) {
         log("info", `Exerciser finished (${err.message?.substring(0, 60) || "done"})`);
     }
 }
 
+
+/**
+ * Check if the target app is currently in the foreground.
+ * If not, re-launch it via `am start` with the LAUNCHER intent.
+ *
+ * Uses `dumpsys activity recents` to check the top task's
+ * base activity, which is more reliable than `dumpsys window`
+ * across different Android/emulator versions.
+ */
+async function ensureAppForeground(packageName) {
+    try {
+        // Method 1: Check the currently focused window
+        const { stdout: windowInfo } = await execFileAsync(ADB, adb(
+            "shell", "dumpsys", "window", "windows"
+        ), { timeout: 5_000 });
+
+        // Look for our package in the current focus line
+        if (windowInfo.includes(`mCurrentFocus`) || windowInfo.includes(`mFocusedApp`)) {
+            const focusLines = windowInfo.split("\n").filter(
+                l => l.includes("mCurrentFocus") || l.includes("mFocusedApp")
+            );
+            const isForeground = focusLines.some(l => l.includes(packageName));
+            if (isForeground) return; // App is in front, nothing to do
+        }
+
+        // Method 2 (fallback): Check the top activity via recents
+        try {
+            const { stdout: recents } = await execFileAsync(ADB, adb(
+                "shell", "dumpsys", "activity", "recents"
+            ), { timeout: 5_000 });
+            // The first "Recent #0" entry is the current foreground task
+            const topTask = recents.split("Recent #0")[1]?.split("Recent #1")[0] || "";
+            if (topTask.includes(packageName)) return; // Still on top
+        } catch { /* fallback failed, proceed to relaunch */ }
+
+        // App is NOT in the foreground — bring it back
+        log("warn", `⚡ ${packageName} left foreground — re-launching...`);
+
+        // Try the launcher intent first (most reliable way)
+        try {
+            await execFileAsync(ADB, adb(
+                "shell", "am", "start",
+                "-a", "android.intent.action.MAIN",
+                "-c", "android.intent.category.LAUNCHER",
+                "--activity-brought-to-front", "true",
+                packageName
+            ), { timeout: 8_000 });
+        } catch {
+            // Fallback: use monkey to launch the default activity
+            try {
+                await execFileAsync(ADB, adb(
+                    "shell", "monkey",
+                    "-p", packageName,
+                    "-c", "android.intent.category.LAUNCHER",
+                    "1"
+                ), { timeout: 8_000 });
+            } catch {
+                // Last resort: direct activity launch
+                try {
+                    await execFileAsync(ADB, adb(
+                        "shell", "am", "start",
+                        "-n", `${packageName}/.MainActivity`
+                    ), { timeout: 8_000 });
+                } catch (e) {
+                    log("warn", `Could not re-launch ${packageName}: ${e.message}`);
+                }
+            }
+        }
+
+        // Give the app a moment to come back to the foreground
+        await new Promise(r => setTimeout(r, 1500));
+        log("ok", `Re-launched ${packageName} into foreground`);
+
+    } catch (err) {
+        // Don't fail the exercise loop if the watchdog itself errors
+        log("warn", `Foreground check failed: ${err.message?.substring(0, 80)}`);
+    }
+}
+
 // ── Output Parser ────────────────────────────────────────────────────────────
+
+/**
+ * Known-bypassable SSL pinning libraries — sourced from OWASP MSTG,
+ * Frida CodeShare, and published Android security research.
+ *
+ * When a hook installs but doesn't fire (HOOK_INSTALLED_UNCONFIRMED),
+ * we use this database to determine severity:
+ *   - Libraries with documented, proven Frida bypasses → HIGH
+ *   - Less common libraries without extensive bypass documentation → MEDIUM
+ *
+ * References:
+ *   - OWASP Mobile Security Testing Guide: MSTG-NETWORK-3, MSTG-NETWORK-4
+ *   - Frida CodeShare: https://codeshare.frida.re/
+ *   - NowSecure SSL pinning bypass research
+ */
+const KNOWN_BYPASSABLE_SSL = {
+    'okhttp3.CertificatePinner':                        { severity: 'high', source: 'OWASP MSTG-NETWORK-4, Frida CodeShare' },
+    'com.squareup.okhttp.CertificatePinner':             { severity: 'high', source: 'OWASP MSTG, legacy OkHTTP bypass documentation' },
+    'com.android.org.conscrypt.TrustManagerImpl':        { severity: 'high', source: 'Android platform, OWASP MSTG-NETWORK-4' },
+    'javax.net.ssl.SSLContext':                          { severity: 'high', source: 'Java SSL API, OWASP MSTG-NETWORK-3' },
+    'javax.net.ssl.X509TrustManager':                   { severity: 'high', source: 'Java SSL API, OWASP MSTG-NETWORK-3' },
+    'com.android.org.conscrypt.CertPinManager':          { severity: 'high', source: 'Android Conscrypt, security research' },
+    'com.android.org.conscrypt.OpenSSLSocketImpl':       { severity: 'high', source: 'Conscrypt, Android security research' },
+    'com.android.org.conscrypt.OpenSSLEngineSocketImpl': { severity: 'high', source: 'Conscrypt, Android security research' },
+    'com.datatheorem.android.trustkit.pinning.PinningTrustManager':   { severity: 'high', source: 'TrustKit documentation, OWASP MSTG' },
+    'com.datatheorem.android.trustkit.pinning.OkHostnameVerifier':    { severity: 'high', source: 'TrustKit documentation' },
+    'com.squareup.okhttp.internal.tls.OkHostnameVerifier':           { severity: 'high', source: 'OkHTTP, OWASP MSTG' },
+    'android.webkit.WebViewClient':                     { severity: 'high', source: 'Android documentation, OWASP MSTG' },
+    'appcelerator.https.PinningTrustManager':            { severity: 'medium', source: 'Limited security research' },
+    'io.fabric.sdk.android.services.network.PinningTrustManager':    { severity: 'medium', source: 'Firebase/Fabric legacy' },
+    'nl.xservices.plugins.sslCertificateChecker':        { severity: 'medium', source: 'PhoneGap/Cordova plugin' },
+    'com.worklight.wlclient.api.WLClient':              { severity: 'medium', source: 'IBM MobileFirst documentation' },
+    'com.worklight.wlclient.certificatepinning.HostNameVerifierWithCertificatePinning': { severity: 'medium', source: 'IBM WorkLight documentation' },
+    'io.netty.handler.ssl.util.FingerprintTrustManagerFactory':      { severity: 'medium', source: 'Netty documentation' },
+    'ch.boye.httpclientandroidlib.conn.ssl.AbstractVerifier':        { severity: 'medium', source: 'Third-party HTTP client' },
+    'org.apache.http.conn.ssl.AbstractVerifier':         { severity: 'medium', source: 'Apache HTTP Components' },
+    'org.chromium.net.impl.CronetEngineBuilderImpl':     { severity: 'medium', source: 'Chromium Cronet' },
+    'diefferson.http_certificate_pinning.HttpCertificatePinning':    { severity: 'medium', source: 'Flutter plugin' },
+    'com.macif.plugin.sslpinningplugin.SslPinningPlugin':            { severity: 'medium', source: 'Flutter plugin' },
+    'com.commonsware.cwac.netsecurity.conscrypt.CertPinManager':     { severity: 'medium', source: 'CWAC Netsecurity' },
+    'org.apache.cordova.CordovaWebViewClient':           { severity: 'medium', source: 'Apache Cordova' },
+    'com.worklight.androidgap.plugin.WLCertificatePinningPlugin':    { severity: 'medium', source: 'IBM WorkLight' },
+    'org.apache.harmony.xnet.provider.jsse.OpenSSLSocketImpl':       { severity: 'medium', source: 'Apache Harmony (legacy)' },
+};
+
+/** Look up known bypass severity for a class name extracted from a tag message */
+function lookupBypassSeverity(tagMessage) {
+    for (const [className, info] of Object.entries(KNOWN_BYPASSABLE_SSL)) {
+        // Check if the class name appears in the tag message (e.g., in [DIAG_OBFUSCATION] or hook name)
+        if (tagMessage.includes(className)) return info;
+    }
+    // Also match by library short name from hook names
+    if (/OkHTTPv3|okhttp3/i.test(tagMessage)) return { severity: 'high', source: 'OkHTTP3 (OWASP MSTG)' };
+    if (/TrustManager.*Android|SSLContext\.init/i.test(tagMessage)) return { severity: 'high', source: 'Android platform SSL' };
+    if (/Conscrypt|TrustManagerImpl/i.test(tagMessage)) return { severity: 'high', source: 'Android Conscrypt' };
+    if (/Trustkit/i.test(tagMessage)) return { severity: 'high', source: 'TrustKit (OWASP MSTG)' };
+    if (/Squareup|OkHostnameVerifier/i.test(tagMessage)) return { severity: 'high', source: 'OkHTTP (OWASP MSTG)' };
+    if (/WebViewClient/i.test(tagMessage)) return { severity: 'high', source: 'Android WebView' };
+    return { severity: 'medium', source: 'Unknown library — limited bypass documentation' };
+}
 
 /**
  * Parse raw Frida output lines into structured findings for the database.
@@ -530,9 +1492,31 @@ function parseOutputToFindings(scriptResults, scanId) {
 
     const PATTERNS = [
         // ── SSL/TLS (MASVS-NETWORK) ──────────────────────────────────────
-        { re: /\[\+\].*Bypass.*ssl|\[\+\].*ssl.*bypass|\[\+\].*certificate.*pinn|\[\+\].*pinn.*bypass/i, sev: "high", cat: "SSL Pinning", title: "SSL Certificate Pinning Bypassed", rec: "Implement multi-layer certificate pinning using network security config and Conscrypt. Verify pin hashes at runtime.", owasp: "M3: Insecure Communication" },
-        { re: /\[\+\].*TrustManager|\[\+\].*checkServerTrusted|\[\+\].*SSLContext\.init/i, sev: "high", cat: "SSL Pinning", title: "Custom TrustManager Hooked", rec: "Avoid custom TrustManager implementations. Use standard SSL validation.", owasp: "M3: Insecure Communication" },
-        { re: /\[\+\].*OkHttp.*bypass|\[\+\].*okhttp.*pin/i, sev: "high", cat: "SSL Pinning", title: "OkHttp Certificate Pinning Bypassed", rec: "Upgrade OkHttp and use CertificatePinner with backup pins.", owasp: "M3: Insecure Communication" },
+        // ── SSL/TLS CONFIRMED BYPASSES ───────────────────────────────────
+        { re: /\[SSL_BYPASS_CONFIRMED\]/i, sev: "high", cat: "SSL Pinning — Confirmed", title: "SSL Pinning Bypass Confirmed", rec: "The Frida hook was invoked on a real call path — this is a confirmed bypass. Implement multi-layer certificate pinning using network security config, Conscrypt, and runtime pin hash verification.", owasp: "M3: Insecure Communication" },
+
+        // ── SSL/TLS HOOK INSTALLED BUT UNVERIFIED ────────────────────────
+        // Note: severity is dynamically adjusted by detectHookInstallations based on KNOWN_BYPASSABLE_SSL
+        { re: /\[SSL_HOOK_INSTALLED\]/i, sev: "info", cat: "SSL Pinning — Unverified", title: "SSL Hook Installed (Not Yet Verified)", rec: "A Frida hook was installed but not invoked during the monitoring window. See detectHookInstallations for severity-adjusted findings.", owasp: "M3: Insecure Communication" },
+
+        // ── SSL/TLS NOT PRESENT ──────────────────────────────────────────
+        { re: /\[SSL_NOT_PRESENT\]/i, sev: "info", cat: "SSL Pinning — Not Present", title: "SSL Pinning Mechanism Not Found", rec: "The target pinning class/method was not found. This may indicate the app does not use this library, or R8/ProGuard obfuscation renamed the class.", owasp: "M3: Insecure Communication" },
+
+        // ── SSL/TLS OBFUSCATED & NATIVE ──────────────────────────────────
+        { re: /\[DETECTED_OBFUSCATED_TRUSTMANAGER\]/i, sev: "high", cat: "SSL Pinning — Obfuscated", title: "Obfuscated TrustManager Detected", rec: "An obfuscated custom TrustManager was found. Standard Frida hooks may not work; shape-based detection is required.", owasp: "M3: Insecure Communication" },
+        { re: /\[PINNING_ACTIVE\].*Obfuscated TrustManager/i, sev: "high", cat: "SSL Pinning — Obfuscated", title: "Obfuscated TrustManager Active", rec: "An obfuscated custom TrustManager actively intercepted a connection.", owasp: "M3: Insecure Communication" },
+        { re: /\[DETECTED_NATIVE_PINNING\]/i, sev: "critical", cat: "SSL Pinning — Native", title: "Native SSL Pinning Detected (BoringSSL/OpenSSL)", rec: "The app registers a custom verify callback at the native layer (C/C++). Java-layer bypasses will fail. Requires native function hooking.", owasp: "M3: Insecure Communication" },
+        { re: /\[NATIVE_PINNING_CHECK\]/i, sev: "info", cat: "SSL Pinning — Native", title: "Native SSL Verification Executed", rec: "Observed the native SSL_get_verify_result function being called.", owasp: "M3: Insecure Communication" },
+
+        // ── Flutter BoringSSL (via kill_flutter) ─────────────────────────
+        { re: /\[SSL_HOOK_INSTALLED\].*Flutter.*BoringSSL/i, sev: "critical", cat: "SSL Pinning — Flutter BoringSSL", title: "Flutter BoringSSL SSL Hook Installed", rec: "The BoringSSL ssl_crypto_x509_session_verify_cert_chain function in libflutter.so has been hooked via offset analysis. Flutter's native SSL verification is now intercepted.", owasp: "M3: Insecure Communication" },
+        { re: /\[SSL_BYPASS_CONFIRMED\].*BoringSSL/i, sev: "critical", cat: "SSL Pinning — Flutter BoringSSL", title: "Flutter SSL Bypass Confirmed (BoringSSL)", rec: "BoringSSL certificate verification was actively bypassed at runtime. All HTTPS traffic from this Flutter app can be intercepted with a proxy.", owasp: "M3: Insecure Communication" },
+        { re: /libflutter\.so base:/i, sev: "info", cat: "SSL Pinning — Flutter BoringSSL", title: "Flutter Engine Module Located", rec: "libflutter.so was found and its base address resolved for offset-based hooking.", owasp: "M3: Insecure Communication" },
+
+        // ── Legacy [+] SSL patterns (backward compat) ────────────────────
+        { re: /\[\+\].*Bypass.*ssl|\[\+\].*ssl.*bypass|\[\+\].*certificate.*pinn|\[\+\].*pinn.*bypass/i, sev: "medium", cat: "SSL Pinning — Unverified", title: "SSL Bypass (Legacy Log — Unverified)", rec: "Detected from a legacy Frida script log format. Hook installation is indicated but runtime interception is not confirmed.", owasp: "M3: Insecure Communication" },
+        { re: /\[\+\].*TrustManager|\[\+\].*checkServerTrusted|\[\+\].*SSLContext\.init/i, sev: "medium", cat: "SSL Pinning — Unverified", title: "TrustManager Hook (Legacy Log — Unverified)", rec: "Detected from a legacy Frida script log format. Interception is not confirmed.", owasp: "M3: Insecure Communication" },
+        { re: /\[\+\].*OkHttp.*bypass|\[\+\].*okhttp.*pin/i, sev: "medium", cat: "SSL Pinning — Unverified", title: "OkHttp Hook (Legacy Log — Unverified)", rec: "Detected from a legacy Frida script log format. Interception is not confirmed.", owasp: "M3: Insecure Communication" },
 
         // ── Root Detection (MASVS-RESILIENCE) ────────────────────────────
         { re: /Bypass root check|Bypass return value for binary|Bypass.*su.*command|Bypass native fopen/i, sev: "medium", cat: "Root Detection", title: "Root Detection Bypassed", rec: "Implement multi-layer root detection including native checks, file system audits, and SafetyNet.", owasp: "M8: Code Tampering" },
@@ -610,47 +1594,146 @@ function parseOutputToFindings(scriptResults, scanId) {
 }
 
 /**
- * Detect successful hook installations as additional findings.
- * If a bypass hook was installed (no [-] error message), that PROVES
- * the protection CAN be bypassed — even if it didn't fire during
- * the monitoring window.
+ * Detect and classify SSL hook outcomes using three-state verification.
+ *
+ * States:
+ *   BYPASS_CONFIRMED  — hook installed AND invoked on a real call (HIGH severity)
+ *   HOOK_INSTALLED     — hook installed but NOT invoked during monitoring window
+ *                        (severity from KNOWN_BYPASSABLE_SSL: HIGH for proven, MEDIUM for unproven)
+ *   NOT_PRESENT        — target class/method not found (INFO severity)
+ *
+ * Also cross-references network activity from SHINOBI-NETWORK.js to provide
+ * diagnostic context when hooks install but don't fire.
  */
 function detectHookInstallations(scriptResults, scanId) {
     const findings = [];
 
-    // SSL-BYE.js: Check if TrustManager/SSLContext hooks installed (no [-] error)
+    // ── SSL Pinning: Outcome-based verification ─────────────────────────
+    // Cross-reference [SSL_HOOK_INSTALLED] vs [SSL_BYPASS_CONFIRMED] tags.
+    // Determine severity from KNOWN_BYPASSABLE_SSL database.
     for (const r of scriptResults) {
         if (r.name !== "SSL Pinning Bypass" || !r.success) continue;
         const outputText = r.output.join("\n");
 
-        // If the script ran but the TrustManager [-] message is absent, the hook installed
-        if (!outputText.includes("[-] TrustManager (Android < 7) pinner not found")) {
+        // Collect confirmed bypasses (hooks that actually fired)
+        const confirmedSet = new Set();
+        for (const line of r.output) {
+            const m = line.match(/\[SSL_BYPASS_CONFIRMED\]\s*(.+?)(?::|$)/);
+            if (m) confirmedSet.add(m[1].trim());
+        }
+
+        // Process each installed hook
+        const installedHooks = [];
+        for (const line of r.output) {
+            const m = line.match(/\[SSL_HOOK_INSTALLED\]\s*(.+?)\s*—\s*(.+)/);
+            if (m) installedHooks.push({ hookName: m[1].trim(), detail: m[2].trim(), line });
+        }
+
+        for (const hook of installedHooks) {
+            // Check if this hook was also confirmed
+            const isConfirmed = confirmedSet.has(hook.hookName);
+
+            if (isConfirmed) {
+                findings.push({
+                    scan_id: scanId,
+                    title: `SSL Bypass Confirmed: ${hook.hookName}`,
+                    severity: "high",
+                    severity_order: 2,
+                    category: "Dynamic — SSL Pinning — Confirmed",
+                    description: `Frida Script: SSL Pinning Bypass\nHook on ${hook.detail} was installed AND invoked on a real call path. This is a confirmed, active bypass of SSL certificate pinning.`,
+                    recommendation: "Implement multi-layer certificate pinning: network security config with backup pins, OkHttp CertificatePinner, and runtime integrity checks to detect hooking frameworks.",
+                    cvss_score: null,
+                    owasp_category: "M3: Insecure Communication",
+                });
+            } else {
+                // Not confirmed — look up severity from known-bypassable database
+                const known = lookupBypassSeverity(hook.line);
+                findings.push({
+                    scan_id: scanId,
+                    title: `SSL Hook Installed (Unverified): ${hook.hookName}`,
+                    severity: known.severity,
+                    severity_order: known.severity === "high" ? 2 : 3,
+                    category: "Dynamic — SSL Pinning — Unverified",
+                    description: `Frida Script: SSL Pinning Bypass\nHook on ${hook.detail} was installed but NOT invoked during the ${FRIDA_SCRIPT_TIMEOUT / 1000}s monitoring window.\n\nThis means the bypass MAY work if the app makes a pinned HTTPS request, but no interception was observed.\n\nSeverity basis: ${known.source}`,
+                    recommendation: known.severity === "high"
+                        ? "This pinning library has documented, proven Frida bypasses (source: " + known.source + "). The hook is very likely functional but the app did not make a pinned request during testing. Consider extending the monitoring window or triggering app network activity."
+                        : "This pinning library has limited bypass documentation. The hook installed but may not be on the correct call path. Consider manual verification.",
+                    cvss_score: null,
+                    owasp_category: "M3: Insecure Communication",
+                });
+            }
+        }
+
+        // Detect NOT_PRESENT with obfuscation context
+        for (const line of r.output) {
+            const m = line.match(/\[SSL_NOT_PRESENT\]\s*(.+?)\s*—\s*(.+)/);
+            if (!m) continue;
+            const hookName = m[1].trim();
+            const className = m[2].trim();
+
+            // Check if there's a matching DIAG_OBFUSCATION line
+            const hasObfuscationHint = outputText.includes('[DIAG_OBFUSCATION] ' + className.split(' ')[0]);
+
             findings.push({
                 scan_id: scanId,
-                title: "SSL TrustManager Bypass Hook Installed",
-                severity: "high",
-                severity_order: 2,
-                category: "Dynamic — SSL Pinning",
-                description: "Frida Script: SSL Pinning Bypass\nThe custom TrustManager and SSLContext.init() hooks installed successfully. This means SSL certificate validation can be completely bypassed at runtime.",
-                recommendation: "Implement additional certificate pinning beyond TrustManager: use OkHttp CertificatePinner, network security config with backup pins, and runtime integrity checks to detect hooking frameworks.",
+                title: `SSL Pinning Not Present: ${hookName}`,
+                severity: "info",
+                severity_order: 5,
+                category: "Dynamic — SSL Pinning — Not Present",
+                description: `Frida Script: SSL Pinning Bypass\nThe target class ${className} was not found in the application.` +
+                    (hasObfuscationHint ? `\n\n⚠️ This may indicate R8/ProGuard obfuscation renamed the class. Check the app's mapping.txt for the obfuscated name. Obfuscation-proof hooking is not attempted in this scan.` : ''),
+                recommendation: "No action needed if the app does not use this pinning library. If the app does use this library but the class was renamed by obfuscation, a custom Frida script targeting the obfuscated name is required.",
                 cvss_score: null,
                 owasp_category: "M3: Insecure Communication",
             });
         }
 
-        // Check Conscrypt/TrustManagerImpl hooks
-        if (!outputText.includes("[-] Conscrypt CertPinManager pinner not found")) {
-            findings.push({
-                scan_id: scanId,
-                title: "Conscrypt CertPinManager Bypass Hook Installed",
-                severity: "high",
-                severity_order: 2,
-                category: "Dynamic — SSL Pinning",
-                description: "Frida Script: SSL Pinning Bypass\nConscrypt CertPinManager hook installed. Android system-level certificate pinning can be bypassed.",
-                recommendation: "Implement application-level pinning on top of system-level Conscrypt checks.",
-                cvss_score: null,
-                owasp_category: "M3: Insecure Communication",
-            });
+        // ── Cross-reference with network activity ────────────────────────
+        // Check SHINOBI-NETWORK.js output to distinguish "no network activity"
+        // from "network activity but hooks didn't fire" (ClassLoader mismatch)
+        if (installedHooks.length > 0 && confirmedSet.size === 0) {
+            const networkCallsObserved = scriptResults.some(sr =>
+                sr.name === "Network Monitor" && sr.output.some(l => /\[NET\]/.test(l))
+            );
+            const classLoaderMismatch = r.output.some(l => /\[DIAG_CLASSLOADER_MISMATCH\]/.test(l));
+
+            if (classLoaderMismatch) {
+                findings.push({
+                    scan_id: scanId,
+                    title: "⚠️ ClassLoader Mismatch Detected",
+                    severity: "medium",
+                    severity_order: 3,
+                    category: "Dynamic — SSL Pinning — Diagnostic",
+                    description: `SSL hooks were installed but the hooked class was found in MULTIPLE ClassLoaders. The app may be loading the pinning class from a different ClassLoader than the one Frida hooked. Check [DIAG_CLASSLOADER_MISMATCH] lines in the script output for details.`,
+                    recommendation: "Use Java.enumerateClassLoadersSync() to find the correct ClassLoader and hook the class via Java.ClassFactory.get(loader).use('className').",
+                    cvss_score: null,
+                    owasp_category: "M3: Insecure Communication",
+                });
+            } else if (!networkCallsObserved) {
+                findings.push({
+                    scan_id: scanId,
+                    title: "ℹ️ No Network Activity During Monitoring",
+                    severity: "info",
+                    severity_order: 5,
+                    category: "Dynamic — SSL Pinning — Diagnostic",
+                    description: `${installedHooks.length} SSL pinning hooks were installed but no network calls were observed during the ${FRIDA_SCRIPT_TIMEOUT / 1000}s monitoring window. The app may not have made any HTTPS requests during testing. The bypasses could not be verified.`,
+                    recommendation: "Extend the monitoring window (increase FRIDA_SCRIPT_TIMEOUT) or trigger app network activity during the scan (e.g., UI automation to navigate to a login screen).",
+                    cvss_score: null,
+                    owasp_category: "M3: Insecure Communication",
+                });
+            } else {
+                findings.push({
+                    scan_id: scanId,
+                    title: "⚠️ Network Activity Observed But Hooks Did Not Fire",
+                    severity: "medium",
+                    severity_order: 3,
+                    category: "Dynamic — SSL Pinning — Diagnostic",
+                    description: `${installedHooks.length} SSL pinning hooks were installed and network calls were observed, but no hook intercepted a real call. This may indicate the app uses a different code path, a different ClassLoader, or AOT-compiled code that bypasses the hooked method.`,
+                    recommendation: "Check [DIAG_CLASSLOADER] and [DIAG_AOT] output lines for diagnostic context. The app may need a custom Frida script targeting the actual code path.",
+                    cvss_score: null,
+                    owasp_category: "M3: Insecure Communication",
+                });
+            }
         }
     }
 
@@ -717,29 +1800,71 @@ function countFridaMatches(scriptResults, pattern) {
 export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, onProgress = null, scanId = null) {
     const notify = onProgress || (() => { });
 
-    // 1. Check emulator — attempt auto-launch if not found
+    // 1. Extract SDK version requirements from APK
+    notify("📋 Extracting SDK version info...");
+    const sdkInfo = await extractSdkInfo(mobsfReport, apkPath);
+    log("info", `APK SDK: min=${sdkInfo.minSdk || "?"} target=${sdkInfo.targetSdk || "?"} max=${sdkInfo.maxSdk || "any"}`);
+
+    // 2. Check emulator — attempt SDK-aware auto-launch if not found
     notify("🔌 Checking emulator connection...");
     let emu = await checkEmulator();
+    let emulatorApi = null;
+    let sdkCompat = null;
 
     if (!emu.connected) {
-        notify("⚙️ No emulator found. Attempting auto-launch via setup-emulator.ps1...");
-        const launched = await launchEmulator(notify);
-        if (launched) {
-            emu = await checkEmulator();
+        // No emulator running — try SDK-aware launch first
+        const avds = await listLocalAvds();
+        if (avds.length > 0 && (sdkInfo.targetSdk || sdkInfo.minSdk)) {
+            const { avd: bestAvd, matchQuality } = selectBestAvd(avds, sdkInfo);
+            if (bestAvd) {
+                notify(`🚀 Launching ${bestAvd.name} (API ${bestAvd.apiLevel}, match: ${matchQuality})...`);
+                log("info", `SDK-aware AVD selection: ${bestAvd.name} (API ${bestAvd.apiLevel}) — match: ${matchQuality}`);
+                const launched = await launchSpecificAvd(bestAvd.name, notify);
+                if (launched) emu = await checkEmulator();
+            }
+        }
+        // Fallback to legacy launch if SDK-aware selection didn't work
+        if (!emu.connected) {
+            notify("⚙️ Attempting generic emulator launch...");
+            const launched = await launchEmulator(notify);
+            if (launched) emu = await checkEmulator();
         }
     }
 
     if (!emu.connected) {
         log("warn", "No emulator connected — skipping dynamic analysis");
+        const recommendation = sdkInfo.targetSdk
+            ? `Create an AVD with API ${sdkInfo.targetSdk} in Android Studio → Tools → Device Manager.`
+            : "Create an AVD in Android Studio → Tools → Device Manager.";
         return {
             success: false,
-            error: "No emulator connected. Start an Android emulator or run setup-emulator.ps1.",
+            error: `No emulator connected. ${recommendation}`,
             skipped: true,
+            sdkInfo,
         };
     }
-    log("ok", `Emulator connected: ${emu.device}`);
 
-    // 2. Get package name
+    // Validate SDK compatibility with the running emulator
+    emulatorApi = await getEmulatorApiLevel();
+    sdkCompat = validateSdkCompatibility(sdkInfo, emulatorApi);
+    log("ok", `Emulator connected: ${emu.device} (API ${emulatorApi || "unknown"})`);
+
+    if (!sdkCompat.compatible) {
+        for (const w of sdkCompat.warnings) {
+            log("error", w);
+            notify(`❌ ${w}`);
+        }
+        // Proceed anyway — APK install will fail naturally if truly incompatible
+    } else if (!sdkCompat.optimal) {
+        for (const w of sdkCompat.warnings) {
+            log("warn", w);
+            notify(`⚠️ ${w}`);
+        }
+    } else {
+        log("ok", `SDK compatibility: ✅ Optimal (emulator API ${emulatorApi} = target ${sdkInfo.targetSdk})`);
+    }
+
+    // 3. Get package name
     const packageName = await getPackageName(mobsfReport, apkPath);
     if (!packageName) {
         return {
@@ -749,14 +1874,59 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
     }
     log("info", `Package: ${packageName}`);
 
-    // 3. Install APK
-    notify("📲 Installing APK on emulator...");
-    const installResult = await installApk(apkPath);
+    // 3a. Detect Flutter app and device type
+    const flutterInfo = await detectFlutterApp(apkPath);
+    const deviceInfo = await detectDeviceType();
+    if (flutterInfo.isFlutter) {
+        log("ok", `🦋 Flutter app detected! ABIs in APK: ${flutterInfo.arches.join(", ")}`);
+        notify(`🦋 Flutter app detected (ABIs: ${flutterInfo.arches.join(", ")})`);
+    }
+
+    // 3b. Try to patch APK with android-unpinner
+    notify("🔧 Attempting to patch APK with android-unpinner (best-effort)...");
+    let installApkPath = apkPath;
+    let unpinnerSuccess = false;
+    const expectedPatchedPath = apkPath.replace(/\.apk$/i, ".unpinned.apk");
+    
+    try {
+        await execFileAsync(UNPINNER, ["patch-apks", "--force", apkPath], { timeout: 120_000 });
+    } catch (e) {
+        // android-unpinner has a known bug on Windows where it crashes trying to print a 🎉 emoji at the very end
+        // Even if it throws, the patching might have succeeded. We will ignore the error here and just check if the file exists.
+        log("info", `android-unpinner exited with error/crash (often expected on Windows due to emoji print): ${e.message.split("\\n")[0]}`);
+    }
+
+    try {
+        await access(expectedPatchedPath); // Check if the patched file was actually created
+        installApkPath = expectedPatchedPath;
+        unpinnerSuccess = true;
+        log("ok", `Successfully patched APK with android-unpinner: ${installApkPath}`);
+    } catch (err) {
+        log("warn", "android-unpinner did not produce the patched APK, falling back to original");
+    }
+
+    // 4. Install APK
+    notify(`📲 Installing APK on emulator (${unpinnerSuccess ? "patched" : "original"})...`);
+    const installResult = await installApk(installApkPath);
     if (!installResult.success) {
         log("error", `APK install failed: ${installResult.error}`);
         return { success: false, error: `APK install failed: ${installResult.error}` };
     }
     log("ok", "APK installed on emulator");
+
+    // ── UI Exploration Setup ─────────────────────────────────────
+    let uiExplorerModule = null;
+    let customHooksModule = null;
+    try {
+        uiExplorerModule = await import("./ui-explorer.mjs");
+    } catch (e) {
+        log("warn", `Could not load ui-explorer.mjs: ${e.message}`);
+    }
+    try {
+        customHooksModule = await import("./custom-hooks-generator.mjs");
+    } catch (e) {
+        log("warn", `Could not load custom-hooks-generator.mjs: ${e.message}`);
+    }
 
     // 4. Ensure Frida server is running
     notify("🔧 Starting Frida server...");
@@ -770,30 +1940,247 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
     }
 
     // 5. Run Frida scripts
+    // ⚠️ ORDER MATTERS: Root detection / anti-tamper bypass MUST run FIRST.
+    // Many apps check for root on startup and call System.exit() if detected.
+    // If we run SSL hooks first, the app crashes before making any network call,
+    // causing SSL bypass to silently fail. By neutralizing root detection first,
+    // subsequent SSL scripts run against an app that stays alive.
     const scripts = [
-        // MASVS-NETWORK — SSL/TLS bypass
-        { name: "SSL Pinning Bypass", file: join(SCRIPTS_DIR, "SSL-BYE.js") },
-        // MASVS-RESILIENCE — Root detection
+        // ── Phase 1: Anti-tamper & root detection bypass (run FIRST) ────
+        // These keep the app alive so subsequent scripts can do their job
         { name: "Root Detection Bypass", file: join(SCRIPTS_DIR, "ROOTER.js") },
-        // MASVS-RESILIENCE + NETWORK — Combined
-        { name: "Combined Bypass (PintooR)", file: join(SCRIPTS_DIR, "PintooR.js") },
-        // MASVS-CRYPTO — Cryptographic monitoring
-        { name: "Crypto Monitor", file: join(SCRIPTS_DIR, "SHINOBI-CRYPTO.js") },
-        // MASVS-NETWORK — Network traffic analysis
-        { name: "Network Monitor", file: join(SCRIPTS_DIR, "SHINOBI-NETWORK.js") },
-        // MASVS-STORAGE — Data storage monitoring
-        { name: "Storage Monitor", file: join(SCRIPTS_DIR, "SHINOBI-STORAGE.js") },
-        // MASVS-AUTH — Authentication monitoring
-        { name: "Auth Monitor", file: join(SCRIPTS_DIR, "SHINOBI-AUTH.js") },
-        // MASVS-PLATFORM — Platform interaction
-        { name: "Platform Monitor", file: join(SCRIPTS_DIR, "SHINOBI-PLATFORM.js") },
-        // MASVS-RESILIENCE — Anti-tamper bypass
         { name: "Resilience Bypass", file: join(SCRIPTS_DIR, "SHINOBI-RESILIENCE.js") },
+
+        // ── Phase 2: SSL/TLS pinning bypass ─────────────────────────────
+        // Now that root detection is neutralized, SSL hooks can fire properly
+        { name: "Combined Bypass (PintooR)", file: join(SCRIPTS_DIR, "PintooR.js") },
+        { name: "SSL Pinning Bypass", file: join(SCRIPTS_DIR, "SSL-BYE.js") },
+        { name: "HTTPToolkit SSL Bypass", file: join(SCRIPTS_DIR, "HTTPTOOLKIT-UNPINNER.js") },
+        { name: "SSL Obfuscated/Native Detection", file: join(SCRIPTS_DIR, "SSL-DETECT-OBFUSCATED.js") },
+
+        // ── Phase 2b: Flutter-specific SSL bypass (BoringSSL native layer) ──
+        // Standard Java-layer SSL hooks don't work on Flutter apps because Flutter
+        // uses BoringSSL compiled into libflutter.so. kill_flutter finds the exact
+        // hook offset via binary analysis and generates a native Frida script.
+        { name: "Flutter SSL Bypass (kill_flutter)", file: "__FLUTTER_DYNAMIC__", flutter: true },
+
+        // ── Phase 3: Behavioral monitoring ──────────────────────────────
+        // Passive observation of crypto, network, storage, auth, platform usage
+        { name: "Crypto Monitor", file: join(SCRIPTS_DIR, "SHINOBI-CRYPTO.js") },
+        { name: "Network Monitor", file: join(SCRIPTS_DIR, "SHINOBI-NETWORK.js") },
+        { name: "Storage Monitor", file: join(SCRIPTS_DIR, "SHINOBI-STORAGE.js") },
+        { name: "Auth Monitor", file: join(SCRIPTS_DIR, "SHINOBI-AUTH.js") },
+        { name: "Platform Monitor", file: join(SCRIPTS_DIR, "SHINOBI-PLATFORM.js") },
     ];
+
+    // Filter scripts based on environment variable if provided
+    // Example: set FRIDA_SCRIPTS_FILTER="SSL,PintooR,Resilience"
+    if (process.env.FRIDA_SCRIPTS_FILTER) {
+        const allowedTokens = process.env.FRIDA_SCRIPTS_FILTER.toLowerCase().split(",").map(s => s.trim());
+        const originalCount = scripts.length;
+        
+        // Mutate the array in place or reassign (since it's a const, we'll reassign the contents)
+        const filtered = scripts.filter(s => 
+            allowedTokens.some(token => s.name.toLowerCase().includes(token))
+        );
+        scripts.length = 0;
+        scripts.push(...filtered);
+        log("info", `Filtered scripts from ${originalCount} to ${scripts.length} based on FRIDA_SCRIPTS_FILTER`);
+    }
+
+    // Append AI-free custom hooks from MobSF analysis
+    let customScriptsCount = 0;
+    if (mobsfReport && customHooksModule) {
+        try {
+            const customScripts = await customHooksModule.generateCustomHooks(mobsfReport, outDir, packageName);
+            scripts.push(...customScripts);
+            customScriptsCount = customScripts.length;
+            log("info", `Generated ${customScripts.length} custom Frida hooks from static analysis`);
+        } catch (e) {
+            log("warn", `Failed to generate custom hooks: ${e.message}`);
+        }
+    }
 
     const scriptResults = [];
     let scriptsRun = 0;
     for (const script of scripts) {
+        // ── Flutter SSL Bypass Handler ───────────────────────────────────
+        if (script.flutter) {
+            if (!flutterInfo.isFlutter) {
+                log("info", `Skipping ${script.name} — not a Flutter app`);
+                scriptResults.push({ name: script.name, output: ["Not a Flutter app — skipped"], success: true });
+                continue;
+            }
+
+            notify(`🦋 Running: ${script.name}...`);
+            log("info", `[Flutter] Starting BoringSSL offset analysis for ${packageName}...`);
+            const output = [];
+            const proxyPort = parseInt(process.env.BURP_PROXY_PORT || "8080");
+
+            try {
+                // Determine the correct arch for the connected device
+                const targetArch = flutterInfo.arches.includes(deviceInfo.deviceArch)
+                    ? deviceInfo.deviceArch
+                    : flutterInfo.arches[0]; // fallback to first available
+
+                log("info", `[Flutter] Target arch: ${targetArch} (device: ${deviceInfo.deviceArch})`);
+
+                // Run kill_flutter to extract offset and generate Frida script
+                const kfResult = await runKillFlutter(
+                    apkPath, targetArch, outDir, packageName,
+                    deviceInfo.proxyIp, proxyPort
+                );
+
+                if (!kfResult.success) {
+                    log("warn", `[Flutter] kill_flutter failed: ${kfResult.error}`);
+                    output.push(`[!] kill_flutter failed: ${kfResult.error}`);
+                    scriptResults.push({ name: script.name, output, success: false, error: kfResult.error });
+                    scriptsRun++;
+                    continue;
+                }
+
+                output.push(`[+] BoringSSL offset: ${kfResult.offset}`);
+                output.push(`[+] Bypass script: ${kfResult.scriptPath}`);
+
+                // Set up iptables DNAT to redirect Flutter's direct connections to Burp
+                log("info", `[Flutter] Setting up iptables DNAT → ${deviceInfo.proxyIp}:${proxyPort}`);
+                await setupIptablesRedirect(deviceInfo.proxyIp, proxyPort);
+
+                // Run the generated Frida bypass script against the app
+                notify(`🦋 Running Flutter bypass Frida script (offset: ${kfResult.offset})...`);
+                const fridaResult = await runFridaScript(packageName, kfResult.scriptPath, script.name);
+                output.push(...fridaResult.output);
+
+                // Revert iptables rules
+                await revertIptablesRedirect(deviceInfo.proxyIp, proxyPort);
+
+                scriptResults.push({
+                    name: script.name,
+                    output,
+                    success: fridaResult.success,
+                    ...(fridaResult.error ? { error: fridaResult.error } : {}),
+                });
+            } catch (err) {
+                log("error", `[Flutter] ${script.name} failed: ${err.message}`);
+                output.push(`[!] Error: ${err.message}`);
+                // Make sure iptables is reverted even on error
+                try { await revertIptablesRedirect(deviceInfo.proxyIp, proxyPort); } catch { }
+                scriptResults.push({ name: script.name, output, success: false, error: err.message });
+            }
+            scriptsRun++;
+            continue;
+        }
+
+        // ── HTTPToolkit SSL Bypass Handler ───────────────────────────────
+        if (script.name === "HTTPToolkit SSL Bypass") {
+            notify(`🔬 Running: ${script.name} (via android-unpinner)...`);
+            log("info", "Executing android-unpinner for SSL pinning bypass...");
+            const output = [];
+            try {
+                // Clear logcat (ignore errors if it fails to clear some buffers)
+                try {
+                    await execFileAsync(ADB, adb("logcat", "-c"));
+                } catch (e) {
+                    log("info", "logcat -c encountered an error, but continuing...");
+                }
+
+                // ── Stop frida-server to avoid JDWP conflicts ───────────────
+                // frida-server holds open JDWP transports and port forwards
+                // that can interfere with android-unpinner's own JDWP session.
+                log("info", "Stopping frida-server temporarily (avoids JDWP conflicts)...");
+                try {
+                    await execFileAsync(ADB, adb("shell", "pkill", "-9", "frida-server"), { timeout: 5000 });
+                } catch { /* frida-server might not be running */ }
+
+                // Clear all stale ADB port forwards
+                try {
+                    await execFileAsync(ADB, adb("forward", "--remove-all"), { timeout: 5000 });
+                } catch { /* no forwards to remove */ }
+
+                // Force-stop the app in case it's still running from a previous script
+                try {
+                    await execFileAsync(ADB, adb("shell", "am", "force-stop", packageName), { timeout: 5000 });
+                } catch { }
+
+                // Clear debug app flag from previous runs
+                try {
+                    await execFileAsync(ADB, adb("shell", "am", "clear-debug-app"), { timeout: 5000 });
+                } catch { }
+
+                // ── Uninstall existing app to prevent signature conflicts ────
+                // android-unpinner does its own APK patching + signing, so the
+                // version it installs will have a DIFFERENT signature from the
+                // one we installed earlier. Uninstalling first avoids
+                // INSTALL_FAILED_UPDATE_INCOMPATIBLE inside the unpinner.
+                log("info", "Uninstalling existing app to prevent signature conflicts...");
+                try {
+                    await execFileAsync(ADB, adb("uninstall", packageName), { timeout: 30_000 });
+                    log("info", `Uninstalled ${packageName}`);
+                } catch {
+                    log("info", `${packageName} was not installed (clean slate)`);
+                }
+
+                await new Promise(r => setTimeout(r, 2000));
+
+                // ── Run android-unpinner with ORIGINAL APK ───────────────────
+                // The unpinner does its own: decode → patch debuggable → rebuild
+                // → sign → install → set-debug-app → JDWP attach → inject gadget.
+                // We pass the original APK and let it handle everything.
+                log("info", `Running: android-unpinner all -f ${apkPath}`);
+                try {
+                    const { stdout: unpinnerOut, stderr: unpinnerErr } = await execFileAsync(
+                        UNPINNER, ["all", "-f", apkPath], { 
+                            timeout: 300_000,
+                            env: { ...process.env, PYTHONIOENCODING: "utf-8" }
+                        }
+                    );
+                    log("ok", "android-unpinner completed successfully");
+                    if (unpinnerOut) log("info", `unpinner stdout: ${unpinnerOut.substring(0, 500)}`);
+                } catch (e) {
+                    // android-unpinner often exits non-zero even on success
+                    const msg = e.message || "";
+                    const stderr = e.stderr || "";
+                    log("info", `android-unpinner finished (exit code non-zero): ${msg.split("\n")[0]}`);
+                    if (stderr) log("info", `unpinner stderr: ${stderr.substring(0, 500)}`);
+                }
+
+                // ── Restart frida-server for subsequent scripts ─────────────
+                try {
+                    spawn(ADB, adb("shell", "/data/local/tmp/frida-server", "-D"), {
+                        stdio: "ignore", detached: true
+                    }).unref();
+                    await new Promise(r => setTimeout(r, 2000));
+                    log("info", "frida-server restarted");
+                } catch { }
+                
+                // Wait briefly for app to fully initialize
+                await new Promise(r => setTimeout(r, 5000));
+                
+                // Run monkey to trigger HTTP requests
+                exerciseApp(packageName).catch(() => {});
+                
+                // Wait for FRIDA_SCRIPT_TIMEOUT
+                await new Promise(r => setTimeout(r, FRIDA_SCRIPT_TIMEOUT));
+                
+                // Dump logcat to capture the Gadget's console.log outputs
+                const { stdout } = await execFileAsync(ADB, adb("logcat", "-d"));
+                const relevantLines = stdout.split("\n").filter(l => 
+                    l.includes("[SSL_") || l.includes("[DIAG_") || l.includes("[!]") || l.includes("HTTPToolkit")
+                );
+                output.push(...relevantLines);
+                
+                // Force-stop the app
+                await execFileAsync(ADB, adb("shell", "am", "force-stop", packageName));
+                
+                scriptResults.push({ name: script.name, output, success: true });
+            } catch (e) {
+                log("warn", `android-unpinner execution failed: ${e.message}`);
+                scriptResults.push({ name: script.name, output: [`Error: ${e.message}`], success: false });
+            }
+            scriptsRun++;
+            continue;
+        }
+
         try { await access(script.file); }
         catch {
             log("warn", `Script not found: ${script.file} — skipping`);
@@ -805,6 +2192,20 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
         const result = await runFridaScript(packageName, script.file, script.name);
         scriptResults.push(result);
         scriptsRun++;
+    }
+
+    // ── UI Exploration (after Frida hooks) ────────────────────
+    let uiResults = null;
+    if (uiExplorerModule) {
+        try {
+            uiResults = await uiExplorerModule.exploreApp(packageName, {
+                zapProxy: true,
+                log,
+                callLLM: null // LLM login is optional; orchestrator-level context not available here
+            });
+        } catch (e) {
+            log("warn", `UI Explorer failed: ${e.message}`);
+        }
     }
 
     // 6. Parse output into structured findings
@@ -828,6 +2229,18 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
         device: emu.device,
         packageName,
         scriptTimeout: FRIDA_SCRIPT_TIMEOUT,
+        sdkInfo,
+        emulatorApiLevel: emulatorApi,
+        unpinnerPatchSuccess: unpinnerSuccess,
+        flutterApp: flutterInfo.isFlutter,
+        flutterArches: flutterInfo.arches,
+        deviceType: deviceInfo.isEmulator ? "emulator" : "physical",
+        deviceArch: deviceInfo.deviceArch,
+        sdkCompatibility: sdkCompat ? {
+            compatible: sdkCompat.compatible,
+            optimal: sdkCompat.optimal,
+            warnings: sdkCompat.warnings,
+        } : null,
         scripts: scriptResults.map(r => ({
             name: r.name,
             success: r.success,
@@ -839,8 +2252,14 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
             totalScripts: scripts.length,
             scriptsRun,
             successful: scriptResults.filter(r => r.success).length,
-            sslBypasses: countFridaMatches(scriptResults, /\[\+\].*bypass.*ssl|\[\+\].*ssl.*bypass|\[\+\].*pinning.*bypass|\[\+\].*bypass.*pinn/i)
-                + dynamicFindings.filter(f => f.category?.includes("SSL Pinning")).length,
+            // Confirmed bypasses only — hooks that intercepted real calls
+            sslBypassesConfirmed: countFridaMatches(scriptResults, /\[SSL_BYPASS_CONFIRMED\]/),
+            // Hooks installed but not invoked during monitoring window
+            sslHooksUnconfirmed: countFridaMatches(scriptResults, /\[SSL_HOOK_INSTALLED\]/),
+            // Mechanisms not found in the app
+            sslNotPresent: countFridaMatches(scriptResults, /\[SSL_NOT_PRESENT\]/),
+            // Backward compat: old field now equals confirmed only (was previously inflated by double-counting)
+            sslBypasses: countFridaMatches(scriptResults, /\[SSL_BYPASS_CONFIRMED\]/),
             rootBypasses: countFridaMatches(scriptResults, /Bypass root check|Bypass return value|Bypass.*su.*command/i)
                 + dynamicFindings.filter(f => f.category?.includes("Root Detection")).length,
             cryptoOps: countFridaMatches(scriptResults, /\[CRYPTO\]/),
@@ -849,7 +2268,7 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
             authEvents: countFridaMatches(scriptResults, /\[AUTH\]/),
             platformIssues: countFridaMatches(scriptResults, /\[PLATFORM\]/),
             resilienceBypasses: countFridaMatches(scriptResults, /\[RESILIENCE\]/),
-            totalHooks: countFridaMatches(scriptResults, /\[\+\]/),
+            totalHooks: countFridaMatches(scriptResults, /\[\+\]|\[SSL_HOOK_INSTALLED\]|\[SSL_BYPASS_CONFIRMED\]/),
             findingsExtracted: dynamicFindings.length,
         },
     };
@@ -866,3 +2285,4 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
 
     return { success: true, results: fridaResults, findings: dynamicFindings };
 }
+

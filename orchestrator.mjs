@@ -1,5 +1,5 @@
 /**
- * ShinobiDroid — Engine Orchestrator
+ * Shinodroid — Engine Orchestrator
  *
  * Discovers engine modules in ./engines/, checks availability,
  * runs them in the correct order, and merges all findings.

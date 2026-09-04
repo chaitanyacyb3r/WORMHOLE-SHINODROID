@@ -1,5 +1,5 @@
 # =============================================
-# ShinobiDroid — Docker Ignore
+# Shinodroid — Docker Ignore
 # Keep build context small and secrets out
 # =============================================
 
@@ -14,7 +14,16 @@
 
 # Dependencies (rebuilt in container)
 node_modules/
+
+# Web dependencies — block everything EXCEPT what the worker needs
 web/node_modules/
+# Whitelist: worker imports Convex generated API + auth packages
+!web/node_modules/convex/
+!web/node_modules/@convex-dev/
+!web/node_modules/@auth/
+
+# Convex generated files — MUST be included for worker
+!web/convex/_generated/
 
 # Git
 .git/
@@ -49,12 +58,17 @@ Thumbs.db
 desktop.ini
 
 # Dev/scratch files
-*.txt
 *.log
 *.tmp
 *.temp
 logs/
 tmp/
+
+# Documentation (not needed in container)
+docs_ai/
+figmadocs/
+ai_claude_sonnet_6_search_srs/
+pitch-deck/
 
 # Gemini / AI artifacts
 .gemini/
