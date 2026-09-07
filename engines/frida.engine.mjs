@@ -10,6 +10,7 @@
 
 import { runDynamicAnalysis } from "../dynamic-analyzer.mjs";
 import { generateDynamicPdf } from "../generate-dynamic-pdf.mjs";
+import { createFinding } from "./_engine-interface.mjs";
 import { join } from "node:path";
 
 export default {
@@ -30,10 +31,11 @@ export default {
             const { stdout } = await execFileAsync("adb", ["devices"], { timeout: 5000 });
             const lines = stdout.split("\n").filter(l => l.includes("device") && !l.startsWith("List"));
             if (lines.length > 0) {
-                // Auto-set ANDROID_SERIAL to first device for subsequent -s calls
-                const serial = lines[0].trim().split(/\s+/)[0];
-                if (serial && !process.env.ANDROID_SERIAL) {
-                    process.env.ANDROID_SERIAL = serial;
+                const serials = lines.map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
+                // Prioritize emulator device over physical USB devices
+                const emuSerial = serials.find(s => s.toLowerCase().startsWith("emulator-")) || serials[0];
+                if (emuSerial && !process.env.ANDROID_SERIAL) {
+                    process.env.ANDROID_SERIAL = emuSerial;
                 }
                 return true;
             }
@@ -90,13 +92,27 @@ export default {
 
             const { results: fridaResults, findings: dynamicFindings = [] } = dynamicResult;
 
+            // Ensure all findings are properly normalized with engine: "frida"
+            const normalizedFindings = dynamicFindings.map(f =>
+                createFinding({
+                    title: f.title,
+                    severity: f.severity,
+                    category: f.category || "Dynamic Analysis",
+                    description: f.description,
+                    recommendation: f.recommendation,
+                    cvss_score: f.cvss_score,
+                    owasp_category: f.owasp_category,
+                    owasp_masvs: f.owasp_masvs,
+                }, "frida", context.scanId)
+            );
+
             // Generate Dynamic PDF
             let dynamicPdfPath = null;
             try {
                 context.log?.("info", "Generating Dynamic Analysis PDF...");
                 const pdfFile = await generateDynamicPdf(
                     fridaResults,
-                    dynamicFindings,
+                    normalizedFindings,
                     {
                         fileName: context.fileName,
                         packageName: fridaResults.packageName,
@@ -113,7 +129,7 @@ export default {
             return {
                 engine: "frida",
                 success: true,
-                findings: dynamicFindings,
+                findings: normalizedFindings,
                 metadata: {
                     fridaResults,
                     packageName: fridaResults.packageName,

@@ -53,19 +53,77 @@ export default {
                 log("warn", `PDF download failed: ${err.message}`);
             }
 
-            // Extract findings from code_analysis
+            // Extract findings from MobSF JSON report
             const findings = [];
-            if (reportData?.code_analysis) {
-                for (const [findingId, f] of Object.entries(reportData.code_analysis)) {
+
+            // 1. Manifest Analysis findings
+            if (Array.isArray(reportData?.manifest_analysis?.manifest_findings)) {
+                for (const f of reportData.manifest_analysis.manifest_findings) {
+                    findings.push(createFinding({
+                        title: f.title || f.name || f.rule || "Manifest Security Finding",
+                        severity: f.severity,
+                        category: "Manifest Analysis",
+                        description: f.description || "No description provided",
+                        recommendation: "Review AndroidManifest.xml and restrict sensitive flags or permissions.",
+                        cvss_score: f.cvss || null,
+                        owasp_category: f.owasp_mobile || null,
+                    }, "mobsf", context.scanId));
+                }
+            }
+
+            // 2. Network Security findings
+            if (Array.isArray(reportData?.network_security?.network_findings)) {
+                for (const f of reportData.network_security.network_findings) {
+                    if (f.severity === "secure" || f.severity === "info") continue;
+                    findings.push(createFinding({
+                        title: `Network Security: ${f.description?.substring(0, 80) || "Issue"}`,
+                        severity: f.severity,
+                        category: "Network Security Configuration",
+                        description: f.description || "No description provided",
+                        recommendation: "Ensure network security configuration disables cleartext and enforces certificate pinning.",
+                        cvss_score: null,
+                        owasp_category: "M3: Insecure Communication",
+                    }, "mobsf", context.scanId));
+                }
+            }
+
+            // 3. Static Code Analysis findings
+            const rawCodeAnalysis = reportData?.code_analysis?.findings || reportData?.code_analysis;
+            if (rawCodeAnalysis && typeof rawCodeAnalysis === "object") {
+                for (const [findingId, f] of Object.entries(rawCodeAnalysis)) {
+                    // Skip top-level MobSF summary/wrapper keys
+                    if (findingId === "summary" || findingId === "findings") continue;
+                    if (!f || typeof f !== "object") continue;
+
                     findings.push(createFinding({
                         title: f.title || f.description?.substring(0, 100) || findingId,
                         severity: f.severity,
-                        category: "Static Analysis",
+                        category: "Static Code Analysis",
                         description: f.description || "No description provided",
                         recommendation: "Review the affected code block and apply standard security best practices.",
                         cvss_score: f.cvss || null,
                         owasp_category: f.owasp_mobile || null,
                     }, "mobsf", context.scanId));
+                }
+            }
+
+            // 4. Certificate findings (high / warning)
+            if (Array.isArray(reportData?.certificate_analysis?.certificate_findings)) {
+                for (const cf of reportData.certificate_analysis.certificate_findings) {
+                    if (Array.isArray(cf) && cf.length >= 2) {
+                        const [sev, desc, title] = cf;
+                        if (sev === "high" || sev === "warning") {
+                            findings.push(createFinding({
+                                title: title || desc?.substring(0, 80) || "Certificate Security Issue",
+                                severity: sev,
+                                category: "Certificate Analysis",
+                                description: desc || "No description provided",
+                                recommendation: "Use strong cryptographic certificates and valid signatures.",
+                                cvss_score: null,
+                                owasp_category: "M5: Insufficient Cryptography",
+                            }, "mobsf", context.scanId));
+                        }
+                    }
                 }
             }
 

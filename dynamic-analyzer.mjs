@@ -83,12 +83,26 @@ export async function checkEmulator() {
     try {
         const { stdout } = await execFileAsync(ADB, ["devices"], { timeout: 10_000 });
         const lines = stdout.trim().split("\n").slice(1);
+        const devices = [];
         for (const line of lines) {
             const parts = line.trim().split(/\s+/);
             if (parts.length >= 2 && parts[1] === "device") {
-                targetSerial = parts[0];
-                return { connected: true, device: parts[0] };
+                devices.push(parts[0]);
             }
+        }
+        if (devices.length > 0) {
+            // Prioritize emulator devices over physical USB devices
+            const emu = devices.find(d => d.toLowerCase().startsWith("emulator-"));
+            if (process.env.ANDROID_SERIAL && devices.includes(process.env.ANDROID_SERIAL)) {
+                targetSerial = process.env.ANDROID_SERIAL;
+            } else if (emu) {
+                targetSerial = emu;
+                process.env.ANDROID_SERIAL = emu;
+            } else {
+                targetSerial = devices[0];
+                process.env.ANDROID_SERIAL = devices[0];
+            }
+            return { connected: true, device: targetSerial };
         }
         return { connected: false, device: null };
     } catch {
@@ -550,41 +564,85 @@ async function launchSpecificAvd(avdName, onProgress) {
  * Verifies connectivity via `frida-ps -U` before returning true.
  */
 async function ensureFridaServer() {
-    // Attempt to restart adb as root (works on most AVDs where su does not)
-    try { await execFileAsync(ADB, adb("root"), { timeout: 10_000 }); } catch { /* ignore */ }
-
-    // Kill any existing (possibly stale) frida-server
+    // Detect if device is rooted via Magisk (su available in adb shell)
+    let isMagisk = false;
     try {
-        await execFileAsync(ADB, adb(
-            "shell", "pkill -f frida-server"),
-            { timeout: 5000 });
-        await new Promise(r => setTimeout(r, 1000));
-    } catch { /* nothing to kill — that's fine */ }
+        const { stdout } = await execFileAsync(ADB, adb("shell", "su", "-c", "whoami"), { timeout: 5000 });
+        if (stdout.trim().includes("root")) {
+            isMagisk = true;
+            log("ok", "Device root access verified via Magisk su");
+        }
+    } catch { /* not Magisk */ }
 
-    // Start fresh frida-server as a daemon
-    log("info", "Starting fresh Frida server on emulator...");
-    try {
-        await execFileAsync(ADB, adb(
-            "shell", "nohup /data/local/tmp/frida-server -D > /dev/null 2>&1 &"),
-            { timeout: 10_000 });
-    } catch (err) {
-        log("error", "Failed to start Frida server: " + err.message);
-        return false;
+    if (isMagisk) {
+        // 1. Ensure SELinux is Permissive so Frida can inject without denials
+        try {
+            await execFileAsync(ADB, adb("shell", "su", "-c", "setenforce 0"), { timeout: 5000 });
+            log("info", "SELinux set to Permissive mode via su");
+        } catch { }
+
+        // 2. Kill any existing frida-server process using su
+        try {
+            await execFileAsync(ADB, adb("shell", "su", "-c", "pkill -9 -f frida-server"), { timeout: 5000 });
+            await new Promise(r => setTimeout(r, 1000));
+        } catch { /* nothing to kill */ }
+
+        // 3. Start frida-server as root using su
+        log("info", "Starting fresh Frida server as root via Magisk su...");
+        try {
+            await execFileAsync(ADB, adb(
+                "shell", "su", "-c", "'nohup /data/local/tmp/frida-server -D > /dev/null 2>&1 &'"),
+                { timeout: 10_000 });
+        } catch (err) {
+            // Fallback: spawn in background detached
+            try {
+                spawn(ADB, adb("shell", "su", "-c", "/data/local/tmp/frida-server -D"), {
+                    stdio: "ignore",
+                    detached: true,
+                }).unref();
+            } catch (spawnErr) {
+                log("error", "Failed to start Frida server via su: " + err.message);
+                return false;
+            }
+        }
+    } else {
+        // Standard AVD emulator flow (adb root on userdebug/eng builds)
+        try { await execFileAsync(ADB, adb("root"), { timeout: 10_000 }); } catch { /* ignore */ }
+
+        // Kill any existing (possibly stale) frida-server
+        try {
+            await execFileAsync(ADB, adb(
+                "shell", "pkill -f frida-server"),
+                { timeout: 5000 });
+            await new Promise(r => setTimeout(r, 1000));
+        } catch { /* nothing to kill */ }
+
+        // Start fresh frida-server as a daemon
+        log("info", "Starting fresh Frida server on emulator/device...");
+        try {
+            await execFileAsync(ADB, adb(
+                "shell", "nohup /data/local/tmp/frida-server -D > /dev/null 2>&1 &"),
+                { timeout: 10_000 });
+        } catch (err) {
+            log("error", "Failed to start Frida server: " + err.message);
+            return false;
+        }
     }
 
     // Verify server is actually responsive (not just running)
-    // frida-ps -U must be able to enumerate processes
-    for (let attempt = 1; attempt <= 2; attempt++) {
-        await new Promise(r => setTimeout(r, 2000 * attempt)); // 2s, then 4s
+    // Uses -D <targetSerial> when available, else -U
+    const fridaTargetArgs = targetSerial ? ["-D", targetSerial] : ["-U"];
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        await new Promise(r => setTimeout(r, 2000 * attempt)); // 2s, 4s, 6s
         try {
-            const { stdout } = await execFileAsync("frida-ps", ["-U"], { timeout: 10_000 });
+            const { stdout } = await execFileAsync("frida-ps", fridaTargetArgs, { timeout: 10_000 });
             const lines = stdout.split("\n").filter(l => l.trim() && !l.startsWith("PID") && !l.startsWith("---"));
             if (lines.length > 0) {
-                log("ok", `Frida server responsive — ${lines.length} processes enumerated`);
+                log("ok", `Frida server responsive (${targetSerial || "USB"}) — ${lines.length} processes enumerated`);
                 return true;
             }
         } catch (err) {
-            log("warn", `Frida connectivity check attempt ${attempt}/2 failed: ${err.message}`);
+            log("warn", `Frida connectivity check attempt ${attempt}/3 failed: ${err.message}`);
         }
     }
 
@@ -812,12 +870,24 @@ async function runKillFlutter(apkPath, arch, outDir, packageName, proxyIp = "10.
             const allOutput = output.join("");
             log("info", `[kill_flutter] Output (exit ${code}):\n${allOutput.substring(0, 1500)}`);
 
-            // Parse the offset from output
-            const offsetMatch = allOutput.match(/SSL verify offset.*?:\s*(0x[0-9a-fA-F]+)/);
-            const offset = offsetMatch ? offsetMatch[1] : null;
-
             // Find the generated Frida script
             const bypassScriptPath = join(kfOutDir, "flutter_bypass.js");
+            let offset = null;
+
+            // Method 1: Read offset directly from generated flutter_bypass.js
+            try {
+                const scriptContent = await readFile(bypassScriptPath, "utf-8");
+                const m = scriptContent.match(/Offset\s*:\s*(0x[0-9a-fA-F]+)/i);
+                if (m) offset = m[1];
+            } catch { }
+
+            // Method 2: Fallback to terminal output with ANSI codes stripped
+            if (!offset) {
+                const cleanOutput = allOutput.replace(/\x1b\[[0-9;]*[mGKH]/g, "");
+                const offsetMatch = cleanOutput.match(/(?:SSL verify offset|Offset).*?:\s*(0x[0-9a-fA-F]+)/i);
+                offset = offsetMatch ? offsetMatch[1] : null;
+            }
+
             try {
                 await access(bypassScriptPath);
                 log("ok", `[kill_flutter] Frida bypass script generated: ${bypassScriptPath}`);
@@ -852,7 +922,7 @@ async function runKillFlutter(apkPath, arch, outDir, packageName, proxyIp = "10.
  */
 function generateFlutterBypassScript(offset) {
     return `/**
- * Flutter SSL Pinning Bypass — generated by Shinodroid + kill_flutter
+ * Flutter SSL Pinning Bypass - generated by Shinodroid + kill_flutter
  * Hooks ssl_crypto_x509_session_verify_cert_chain in libflutter.so
  * Offset: ${offset}
  */
@@ -862,7 +932,7 @@ function bypass() {
     var moduleName = "libflutter.so";
     var m = Process.findModuleByName(moduleName);
     if (!m) {
-        console.log("[!] Module " + moduleName + " not found — retrying in 1s...");
+        console.log("[!] Module " + moduleName + " not found - retrying in 1s...");
         setTimeout(bypass, 1000);
         return;
     }
@@ -876,11 +946,11 @@ function bypass() {
     Interceptor.attach(addr, {
         onLeave: function (retval) {
             retval.replace(0x1);
-            console.log("[SSL_BYPASS_CONFIRMED] BoringSSL cert verification bypassed — returned SUCCESS");
+            console.log("[SSL_BYPASS_CONFIRMED] BoringSSL cert verification bypassed - returned SUCCESS");
         }
     });
 
-    console.log("[+] Flutter SSL bypass ACTIVE — all certificates will be trusted");
+    console.log("[+] Flutter SSL bypass ACTIVE - all certificates will be trusted");
 }
 
 setTimeout(bypass, 500);
@@ -987,15 +1057,16 @@ function runFridaScript(packageName, scriptPath, scriptName) {
         // ── Spawn mode ──────────────────────────────────────────────────
         // Uses -f to spawn the app in a paused state, -l loads the script,
         // then we write %resume to stdin to unpause and let the app run.
+        const fridaDeviceArgs = targetSerial ? ["-D", targetSerial] : ["-U"];
+
         const trySpawn = () => {
             return new Promise((resolveSpawn) => {
                 let spawnFailed = false;
 
                 const proc = spawn("frida", [
-                    "-U",
+                    ...fridaDeviceArgs,
                     "-f", packageName,
                     "-l", scriptPath,
-                    "--no-pause",
                 ], {
                     stdio: ["pipe", "pipe", "pipe"],
                     timeout: FRIDA_SCRIPT_TIMEOUT + 5000,
@@ -1017,7 +1088,7 @@ function runFridaScript(packageName, scriptPath, scriptName) {
                     }
                 });
 
-                // --no-pause resumes the app automatically after script load.
+                // In modern Frida, spawn mode automatically resumes the app after script load.
                 // After 4s (app resumed + running), exercise with monkey
                 const monkeyDelay = setTimeout(() => {
                     if (!spawnFailed) exerciseApp(packageName).catch(() => { });
@@ -1083,15 +1154,15 @@ function runFridaScript(packageName, scriptPath, scriptName) {
                 ), { timeout: 5000 });
                 const pid = pidOut.trim().split(/\s+/)[0]; // Take first PID if multiple
                 if (pid && /^\d+$/.test(pid)) {
-                    fridaArgs = ["-U", "-p", pid, "-l", scriptPath];
+                    fridaArgs = [...fridaDeviceArgs, "-p", pid, "-l", scriptPath];
                     log("info", `  Attaching to PID ${pid}`);
                 } else {
                     log("warn", `  pidof returned invalid PID: "${pidOut.trim()}"`);
-                    fridaArgs = ["-U", "-n", packageName, "-l", scriptPath];
+                    fridaArgs = [...fridaDeviceArgs, "-n", packageName, "-l", scriptPath];
                 }
             } catch {
                 log("warn", `  pidof failed — trying name-based attach`);
-                fridaArgs = ["-U", "-n", packageName, "-l", scriptPath];
+                fridaArgs = [...fridaDeviceArgs, "-n", packageName, "-l", scriptPath];
             }
 
             // Step 3: Attach Frida
@@ -2126,10 +2197,16 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
                 // The unpinner does its own: decode → patch debuggable → rebuild
                 // → sign → install → set-debug-app → JDWP attach → inject gadget.
                 // We pass the original APK and let it handle everything.
-                log("info", `Running: android-unpinner all -f ${apkPath}`);
+                log("info", `Running: android-unpinner all -f ${targetSerial ? `-d ${targetSerial} ` : ""}${apkPath}`);
                 try {
+                    const unpinnerArgs = ["all", "-f"];
+                    if (targetSerial) {
+                        unpinnerArgs.push("-d", targetSerial);
+                    }
+                    unpinnerArgs.push(apkPath);
+
                     const { stdout: unpinnerOut, stderr: unpinnerErr } = await execFileAsync(
-                        UNPINNER, ["all", "-f", apkPath], { 
+                        UNPINNER, unpinnerArgs, { 
                             timeout: 300_000,
                             env: { ...process.env, PYTHONIOENCODING: "utf-8" }
                         }
@@ -2146,11 +2223,8 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
 
                 // ── Restart frida-server for subsequent scripts ─────────────
                 try {
-                    spawn(ADB, adb("shell", "/data/local/tmp/frida-server", "-D"), {
-                        stdio: "ignore", detached: true
-                    }).unref();
-                    await new Promise(r => setTimeout(r, 2000));
-                    log("info", "frida-server restarted");
+                    await ensureFridaServer();
+                    log("info", "frida-server verified and restarted");
                 } catch { }
                 
                 // Wait briefly for app to fully initialize
@@ -2282,6 +2356,11 @@ export async function runDynamicAnalysis(apkPath, outDir, mobsfReport = null, on
     notify("🧹 Cleaning up...");
     await uninstallApk(packageName);
     log("ok", "APK uninstalled from emulator");
+
+    // Ensure engine is explicitly set on all dynamic findings
+    for (const f of dynamicFindings) {
+        if (!f.engine) f.engine = "frida";
+    }
 
     return { success: true, results: fridaResults, findings: dynamicFindings };
 }

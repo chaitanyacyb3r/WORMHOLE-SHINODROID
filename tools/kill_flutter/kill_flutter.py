@@ -805,7 +805,7 @@ def write_frida_script(offset, package, platform, out_path):
 function hook_ssl_verify_result(address) {{
     Interceptor.attach(address, {{
         onEnter: function(args) {{
-            console.log("[+] ssl_verify hooked — killing cert validation");
+            console.log("[+] ssl_verify hooked - killing cert validation");
         }},
         onLeave: function(retval) {{
             console.log("[*] retval was: " + retval);
@@ -831,7 +831,7 @@ function disablePinning() {{
 
 setTimeout(disablePinning, 1000);
 """
-    with open(out_path, 'w') as f:
+    with open(out_path, 'w', encoding='utf-8') as f:
         f.write(script)
     print(f"\033[92m[+]\033[0m Frida script saved: \033[93m{out_path}\033[0m")
 

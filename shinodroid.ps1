@@ -57,7 +57,8 @@ $webPath   = Join-Path $PSScriptRoot 'web'
 # ==============================================================================
 #  Environment Configuration
 # ==============================================================================
-$aiModel = "minimax-m2.7"
+$aiModel   = "ornith-64k"
+$aiBackend = "ollama"
 
 # Load default AI model from .env if available
 if (Test-Path (Join-Path $rootDir ".env")) {
@@ -67,6 +68,12 @@ if (Test-Path (Join-Path $rootDir ".env")) {
             $parsedModel = $Matches[1].Trim()
             if ($parsedModel) {
                 $aiModel = $parsedModel
+            }
+        }
+        if ($line -match '^\s*AI_BACKEND\s*=\s*([^#\r\n]+)') {
+            $parsedBackend = $Matches[1].Trim()
+            if ($parsedBackend) {
+                $aiBackend = $parsedBackend
             }
         }
     }
@@ -80,7 +87,11 @@ if ($SkipAI) {
     $aiStatus = 'ACTIVE'
     # Format display name cleanly (remove tags like :cloud if needed for box)
     $cleanAi = if ($aiModel -match '^([^:]+)') { $Matches[1] } else { $aiModel }
-    $aiDisplay = $cleanAi
+    if ($aiBackend -eq 'hermes') {
+        $aiDisplay = "Hermes ($cleanAi)"
+    } else {
+        $aiDisplay = $cleanAi
+    }
 }
 
 # ==============================================================================
@@ -230,7 +241,7 @@ function Show-Summary {
         [string]$MobSfStatus = 'ONLINE',
         [string]$EmulatorInfo = 'Pixel_6a (API 34)',
         [string]$EmulatorStatus = 'READY',
-        [string]$AiInfo = 'minimax-m2.7',
+        [string]$AiInfo = 'ornith-64k',
         [string]$AiStatus = 'ACTIVE',
         [string]$WorkerInfo = 'Listening...',
         [string]$WorkerStatus = 'ACTIVE'
@@ -274,16 +285,19 @@ if ($Mode -eq 'scan') {
     $mobsfUp = Start-MobSFServer -WaitSeconds 35
     $mobsfSummaryStatus = if ($mobsfUp) { "ONLINE" } else { "OFFLINE" }
 
-    # Check Emulator
+    # Check Android Device / Emulator
     $devices = cmd /c "adb devices 2>&1"
     $connected = $devices | Select-String "device$"
     if ($connected) {
-        $runningApi = (cmd /c "adb shell getprop ro.build.version.sdk 2>&1").Trim()
-        Write-SubStep -Ok "Emulator connected (API $runningApi)"
-        $emuSummaryInfo = "Connected (API $runningApi)"
+        $devSerial = ($connected[0].Line -split "`t")[0].Trim()
+        $isEmulator = $devSerial -like "emulator-*"
+        $devType = if ($isEmulator) { "Emulator" } else { "Physical device ($devSerial)" }
+        $runningApi = (cmd /c "adb -s $devSerial shell getprop ro.build.version.sdk 2>&1").Trim()
+        Write-SubStep -Ok "$devType connected (API $runningApi)"
+        $emuSummaryInfo = "$devType (API $runningApi)"
         $emuSummaryStatus = "READY"
     } else {
-        Write-SubStep -Warn "No Android emulator connected (Dynamic analysis skipped)"
+        Write-SubStep -Warn "No Android device/emulator connected (Dynamic analysis skipped)"
         $emuSummaryInfo = "None"
         $emuSummaryStatus = "OFFLINE"
     }
@@ -483,19 +497,22 @@ if ($SkipEmulator) {
     $selectedAvdDisplay = "Skipped"
     $emulatorStatus = "SKIP"
 } else {
-    # Check if an emulator is ALREADY running
+    # Check if a device or emulator is ALREADY running
     $devices = cmd /c "adb devices 2>&1"
     $alreadyRunning = $devices | Select-String "device$"
 
     if ($alreadyRunning) {
+        $devSerial = ($alreadyRunning[0].Line -split "`t")[0].Trim()
+        $isEmulator = $devSerial -like "emulator-*"
+        $devLabel = if ($isEmulator) { "Emulator" } else { "Physical device ($devSerial)" }
         try {
-            $runningApi = (cmd /c "adb shell getprop ro.build.version.sdk 2>&1").Trim()
-            Write-SubStep -Ok "Emulator already running (API $runningApi)"
-            $selectedAvdDisplay = "Active (API $runningApi)"
+            $runningApi = (cmd /c "adb -s $devSerial shell getprop ro.build.version.sdk 2>&1").Trim()
+            Write-SubStep -Ok "$devLabel already active (API $runningApi)"
+            $selectedAvdDisplay = "$devLabel (API $runningApi)"
             $emulatorStatus = "READY"
         } catch {
-            Write-SubStep -Ok "Emulator already running"
-            $selectedAvdDisplay = "Active Emulator"
+            Write-SubStep -Ok "$devLabel already active"
+            $selectedAvdDisplay = $devLabel
             $emulatorStatus = "READY"
         }
     } else {
@@ -611,17 +628,28 @@ $deviceConnected = $devicesCheck | Select-String "device$"
 
 if ($deviceConnected) {
     # Check if Frida server is already running
-    $fridaRunning = cmd /c "adb shell 'ps -A | grep frida-server' 2>&1"
-    if ($fridaRunning -match "frida-server" -and $fridaRunning -notmatch "grep") {
+    $psList = cmd /c "adb shell ps -A 2>&1"
+    $fridaRunning = $psList | Select-String "frida-server"
+    if ($fridaRunning) {
         Write-SubStep -Ok "Frida server already active on device"
     } else {
-        $setupScript = Join-Path $rootDir "setup-emulator.ps1"
-        if (Test-Path $setupScript) {
-            Write-SubStep -Info "Running emulator instrumentation setup..."
-            & $setupScript
-            Write-SubStep -Ok "Frida server initialized on device"
+        # Check if Magisk su is available
+        $suCheck = (cmd /c "adb shell su -c whoami 2>&1").Trim()
+        if ($suCheck -eq "root") {
+            Write-SubStep -Info "Starting Frida server with Magisk su..."
+            cmd /c "adb shell su -c setenforce 0 2>&1" | Out-Null
+            Start-Process -NoNewWindow adb -ArgumentList "shell", "su", "-c", "nohup /data/local/tmp/frida-server -D > /dev/null 2>&1 &"
+            Start-Sleep -Seconds 2
+            Write-SubStep -Ok "Frida server initialized via su on physical device"
         } else {
-            Write-SubStep -Warn "setup-emulator.ps1 not found; skipped automated Frida push"
+            $setupScript = Join-Path $rootDir "setup-emulator.ps1"
+            if (Test-Path $setupScript) {
+                Write-SubStep -Info "Running emulator instrumentation setup..."
+                & $setupScript
+                Write-SubStep -Ok "Frida server initialized on device"
+            } else {
+                Write-SubStep -Warn "setup-emulator.ps1 not found; skipped automated Frida push"
+            }
         }
     }
 

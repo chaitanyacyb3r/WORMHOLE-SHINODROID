@@ -218,39 +218,53 @@ Java.perform(function() {
         return this.get.call(this, name);
     };
 
-    Interceptor.attach(Module.findExportByName("libc.so", "fopen"), {
-        onEnter: function(args) {
-            var path = Memory.readCString(args[0]);
-            path = path.split("/");
-            var executable = path[path.length - 1];
-            var shouldFakeReturn = (RootBinaries.indexOf(executable) > -1)
-            if (shouldFakeReturn) {
-                Memory.writeUtf8String(args[0], "/notexists");
-                send("Bypass native fopen");
-            }
-        },
-        onLeave: function(retval) {
+    var fopenPtr = Module.findExportByName("libc.so", "fopen");
+    if (fopenPtr) {
+        Interceptor.attach(fopenPtr, {
+            onEnter: function(args) {
+                if (!args[0] || args[0].isNull()) return;
+                try {
+                    var path = Memory.readCString(args[0]);
+                    if (!path) return;
+                    var parts = path.split("/");
+                    var executable = parts[parts.length - 1];
+                    var shouldFakeReturn = (RootBinaries.indexOf(executable) > -1);
+                    if (shouldFakeReturn) {
+                        Memory.writeUtf8String(args[0], "/notexists");
+                        send("Bypass native fopen");
+                    }
+                } catch (e) {}
+            },
+            onLeave: function(retval) {
 
-        }
-    });
-
-    Interceptor.attach(Module.findExportByName("libc.so", "system"), {
-        onEnter: function(args) {
-            var cmd = Memory.readCString(args[0]);
-            send("SYSTEM CMD: " + cmd);
-            if (cmd.indexOf("getprop") != -1 || cmd == "mount" || cmd.indexOf("build.prop") != -1 || cmd == "id") {
-                send("Bypass native system: " + cmd);
-                Memory.writeUtf8String(args[0], "grep");
             }
-            if (cmd == "su") {
-                send("Bypass native system: " + cmd);
-                Memory.writeUtf8String(args[0], "BrutSecurity");
-            }
-        },
-        onLeave: function(retval) {
+        });
+    }
 
-        }
-    });
+    var systemPtr = Module.findExportByName("libc.so", "system");
+    if (systemPtr) {
+        Interceptor.attach(systemPtr, {
+            onEnter: function(args) {
+                if (!args[0] || args[0].isNull()) return;
+                try {
+                    var cmd = Memory.readCString(args[0]);
+                    if (!cmd) return;
+                    send("SYSTEM CMD: " + cmd);
+                    if (cmd.indexOf("getprop") != -1 || cmd == "mount" || cmd.indexOf("build.prop") != -1 || cmd == "id") {
+                        send("Bypass native system: " + cmd);
+                        Memory.writeUtf8String(args[0], "grep");
+                    }
+                    if (cmd == "su") {
+                        send("Bypass native system: " + cmd);
+                        Memory.writeUtf8String(args[0], "BrutSecurity");
+                    }
+                } catch (e) {}
+            },
+            onLeave: function(retval) {
+
+            }
+        });
+    }
 
 
 
@@ -302,13 +316,13 @@ Java.perform(function() {
             for (var i = 0; i < cmd.length; i = i + 1) {
                 var tmp_cmd = cmd[i];
                 if (tmp_cmd.indexOf("getprop") != -1 || tmp_cmd == "mount" || tmp_cmd.indexOf("build.prop") != -1 || tmp_cmd == "id") {
-                    var fake_cmd = ["grep"];
-                    send("Bypass " + cmdarr + " command");
+                    fake_cmd = ["grep"];
+                    send("Bypass " + cmd + " command");
                 }
 
                 if (tmp_cmd == "su") {
-                    var fake_cmd = ["BrutSecurity"];
-                    send("Bypass " + cmdarr + " command");
+                    fake_cmd = ["BrutSecurity"];
+                    send("Bypass " + cmd + " command");
                 }
             }
             return ProcManExec.call(this, fake_cmd, env, workdir, redirectstderr);
@@ -319,13 +333,13 @@ Java.perform(function() {
             for (var i = 0; i < cmd.length; i = i + 1) {
                 var tmp_cmd = cmd[i];
                 if (tmp_cmd.indexOf("getprop") != -1 || tmp_cmd == "mount" || tmp_cmd.indexOf("build.prop") != -1 || tmp_cmd == "id") {
-                    var fake_cmd = ["grep"];
-                    send("Bypass " + cmdarr + " command");
+                    fake_cmd = ["grep"];
+                    send("Bypass " + cmd + " command");
                 }
 
                 if (tmp_cmd == "su") {
-                    var fake_cmd = ["BrutSecurity"];
-                    send("Bypass " + cmdarr + " command");
+                    fake_cmd = ["BrutSecurity"];
+                    send("Bypass " + cmd + " command");
                 }
             }
             return ProcManExecVariant.call(this, fake_cmd, env, directory, stdin, stdout, stderr, redirect);

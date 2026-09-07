@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # WORMHOLE // Shinodroid - Comprehensive Firewall Hardening
 # Run as Administrator: Right-click -> Run as Administrator
 #

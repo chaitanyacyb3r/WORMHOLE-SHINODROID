@@ -52,7 +52,7 @@ async function zapFetchRaw(path, params = {}) {
     for (const [k, v] of Object.entries(params)) {
         url.searchParams.set(k, v);
     }
-    const res = await fetch(url.toString());
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(30_000) });
     if (!res.ok) throw new Error(`ZAP API ${res.status}`);
     return await res.text();
 }

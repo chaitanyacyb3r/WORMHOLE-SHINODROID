@@ -15,10 +15,11 @@
  *   6. Prioritized remediation roadmap with Gantt chart
  *   7. Full markdown report saved to the scan output directory
  *
- * Connects to Ollama at http://127.0.0.1:11434 (default).
- * Model: minimax-m2.7:cloud (configurable via OLLAMA_MODEL env var).
+ * Connects to Ollama at http://127.0.0.1:11434 (default) or Hermes at http://127.0.0.1:8642.
+ * Model: ornith-64k:latest (configurable via OLLAMA_MODEL env var).
+ * Backend: Ollama (default) or Hermes Agent (via AI_BACKEND env var).
  *
- * Graceful degradation: if Ollama is not running or the model is not
+ * Graceful degradation: if Ollama or Hermes is not running or the model is not
  * available, the engine returns skipped=true and the pipeline continues.
  */
 
@@ -26,65 +27,106 @@ import { createFinding } from "./_engine-interface.mjs";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ComplianceMapper } from "../src/utils/compliance-map.mjs";
+import { Agent, setGlobalDispatcher } from "undici";
 
 // -- Configuration ------------------------------------------------------------
 
 const OLLAMA_BASE = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "minimax-m2.7:cloud";
-const REQUEST_TIMEOUT_MS = 180_000; // 3 min per LLM call (detailed analysis needs time)
-const MAX_FINDINGS_PER_BATCH = 20;  // Process findings in batches of this size
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "ornith-64k:latest";
+const AI_BACKEND = process.env.AI_BACKEND || "ollama"; // "ollama" | "hermes"
+const HERMES_URL = process.env.HERMES_URL || "http://127.0.0.1:8642";
+const REQUEST_TIMEOUT_MS = 600_000; // 10 min per LLM call (local inference needs sufficient time)
+const MAX_FINDINGS_PER_BATCH = 15;  // Process findings in smaller batches for local context
 
-// -- Ollama REST helper -------------------------------------------------------
+// Configure undici dispatcher with extended headers/body timeouts to avoid Node fetch 5-min timeout
+try {
+    const customAgent = new Agent({
+        headersTimeout: REQUEST_TIMEOUT_MS,
+        bodyTimeout: REQUEST_TIMEOUT_MS,
+        connectTimeout: 30_000,
+    });
+    setGlobalDispatcher(customAgent);
+} catch {
+    // Fallback if dispatcher already set
+}
+
+// -- LLM REST helper (OpenAI-compatible /v1/chat/completions) -----------------
 
 /**
- * Send a chat completion request to Ollama's /api/chat endpoint.
+ * Send a chat completion request to the configured AI backend (Ollama or Hermes Agent).
+ * Uses the OpenAI-compatible /v1/chat/completions endpoint.
  * Returns the assistant's response text, or null on failure.
  */
-async function ollamaChat(systemPrompt, userPrompt, log) {
-    const url = `${OLLAMA_BASE}/api/chat`;
+async function llmChat(systemPrompt, userPrompt, log) {
+    const baseUrl = AI_BACKEND === "hermes" ? HERMES_URL : OLLAMA_BASE;
+    const url = `${baseUrl}/v1/chat/completions`;
+
     const body = {
-        model: OLLAMA_MODEL,
+        model: AI_BACKEND === "hermes" ? "hermes-agent" : OLLAMA_MODEL,
         messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
         ],
         stream: false,
-        options: {
-            temperature: 0.3,
-            num_predict: 8192,
-        },
+        temperature: 0.3,
+        max_tokens: 8192,
     };
 
-    try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    // For Ollama backend, specify the context window size (default 16k to prevent slow inference/VRAM swapping)
+    if (AI_BACKEND === "ollama") {
+        body.options = {
+            num_ctx: parseInt(process.env.OLLAMA_NUM_CTX || "16384", 10),
+        };
+    }
 
+    try {
         const res = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
-            signal: controller.signal,
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
-
-        clearTimeout(timeout);
 
         if (!res.ok) {
             const errText = await res.text().catch(() => "unknown error");
-            log?.("warn", `  Ollama returned ${res.status}: ${errText.substring(0, 200)}`);
+            const providerName = AI_BACKEND === "hermes" ? "Hermes Agent" : "Ollama";
+            log?.("warn", `  [AI] ${providerName} returned ${res.status}: ${errText.substring(0, 200)}`);
             return null;
         }
 
         const data = await res.json();
-        return data?.message?.content || null;
-    } catch (err) {
-        if (err.name === "AbortError") {
-            log?.("warn", `  Ollama request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+        const choice = data?.choices?.[0];
+
+        if (!choice) {
+            log?.("warn", "  [AI] LLM returned empty choices array");
+            return null;
+        }
+
+        // Completeness verification
+        if (choice.finish_reason === "length") {
+            log?.("warn", "  [AI] Response was truncated (hit max_tokens limit). Consider reducing batch size or prompt length.");
+        } else if (choice.finish_reason === "stop") {
+            // Normal full completion
         } else {
-            log?.("warn", `  Ollama request failed: ${err.message}`);
+            log?.("info", `  [AI] Response finish_reason: ${choice.finish_reason || "unknown"}`);
+        }
+
+        const content = choice.message?.content || choice.message?.reasoning || null;
+        return content;
+    } catch (err) {
+        const providerName = AI_BACKEND === "hermes" ? "Hermes Agent" : "Ollama";
+        const causeMsg = err.cause ? ` (${err.cause.code || err.cause.message || err.cause})` : "";
+        if (err.name === "AbortError" || err.name === "TimeoutError") {
+            log?.("warn", `  [AI] ${providerName} request timed out after ${REQUEST_TIMEOUT_MS / 1000}s${causeMsg}`);
+        } else {
+            log?.("warn", `  [AI] ${providerName} request failed: ${err.message}${causeMsg}`);
         }
         return null;
     }
 }
+
+// Preserve backward compatibility for internal references
+const ollamaChat = llmChat;
 
 // -- System prompt ------------------------------------------------------------
 
@@ -424,6 +466,7 @@ function buildReportHeader(appName, packageName, findings, engines) {
 > **Application:** ${appName}
 > **Package:** ${packageName || "N/A"}
 > **Date:** ${now}
+> **Backend:** ${AI_BACKEND === "hermes" ? "Hermes Agent" : "Ollama"}
 > **Model:** ${OLLAMA_MODEL}
 > **Engines:** ${engines.join(", ")}
 > **Total Findings:** ${findings.length}
@@ -871,19 +914,28 @@ export default {
     version: "1.0.0",
 
     /**
-     * Check if Ollama is running and the model is available.
+     * Check if the AI backend (Ollama or Hermes) is running and the model is available.
      */
     async isAvailable() {
         if (process.env.SKIP_AI) return false;
+
+        // Hermes Agent backend: probe /v1/models
+        if (AI_BACKEND === "hermes") {
+            try {
+                const res = await fetch(`${HERMES_URL}/v1/models`, {
+                    signal: AbortSignal.timeout(5000),
+                });
+                return res.ok;
+            } catch {
+                return false;
+            }
+        }
+
+        // Ollama backend: check /api/tags
         try {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 5000);
-
             const res = await fetch(`${OLLAMA_BASE}/api/tags`, {
-                signal: controller.signal,
+                signal: AbortSignal.timeout(5000),
             });
-
-            clearTimeout(timeout);
             if (!res.ok) return false;
 
             const data = await res.json();
@@ -921,8 +973,9 @@ export default {
         const appName = context.packageName || context.fileName || "Unknown App";
         const packageName = context.packageName || null;
         const engines = [...new Set(allFindings.map(f => f.engine))];
+        const providerDisplay = AI_BACKEND === "hermes" ? `Hermes Agent (${OLLAMA_MODEL})` : OLLAMA_MODEL;
 
-        log("info", `[AI] Starting comprehensive analysis of ${allFindings.length} findings with ${OLLAMA_MODEL}...`);
+        log("info", `[AI] Starting comprehensive analysis of ${allFindings.length} findings with ${providerDisplay}...`);
 
         // Sort findings by severity (critical first)
         const sorted = [...allFindings]
@@ -931,6 +984,7 @@ export default {
         const reportSections = [];
         const metadata = {
             model: OLLAMA_MODEL,
+            backend: AI_BACKEND,
             findingsAnalyzed: allFindings.length,
             sectionsGenerated: 0,
             reportPath: null,
@@ -1046,6 +1100,7 @@ export default {
         reportSections.push(
             `## Report Metadata\n\n` +
             `- **Generated by:** Shinodroid AI Engine v1.0.0\n` +
+            `- **Backend:** ${AI_BACKEND === "hermes" ? "Hermes Agent" : "Ollama"}\n` +
             `- **Model:** ${OLLAMA_MODEL}\n` +
             `- **Analysis time:** ${elapsed}s\n` +
             `- **Findings analyzed:** ${allFindings.length}\n` +
@@ -1099,7 +1154,7 @@ export default {
             severity: "info",
             category: "AI Assessment",
             description: [
-                `Comprehensive AI security analysis completed using ${OLLAMA_MODEL}.`,
+                `Comprehensive AI security analysis completed using ${AI_BACKEND === "hermes" ? "Hermes Agent (" + OLLAMA_MODEL + ")" : OLLAMA_MODEL}.`,
                 `Analyzed ${allFindings.length} findings across ${engines.length} engines.`,
                 `Generated ${metadata.sectionsGenerated} report sections in ${elapsed}s.`,
                 metadata.reportPath ? `Full report: ${metadata.reportPath}` : "",
